@@ -30,11 +30,11 @@ Secrets are fetched live at container start. The only thing persisted is
 ## Install
 
 ```bash
-# Via uv
-uv tool install podman-secret-infisical
+# Via uv from GitHub
+uv tool install git+https://github.com/quickvm/psi.git
 
-# Or in a container
-podman build -t psi .
+# Or use the container image
+podman pull ghcr.io/quickvm/psi:latest
 ```
 
 Requires Python 3.14+. Type checked with [ty](https://github.com/astral-sh/ty).
