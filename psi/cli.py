@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 from rich.console import Console
 
-from psi.settings import load_settings
+from psi.settings import load_settings, resolve_auth
 
 if TYPE_CHECKING:
     from psi.models import AuthConfig
@@ -69,7 +69,9 @@ def login(config: ConfigOption = None) -> None:
     from psi.api import InfisicalClient
 
     settings = load_settings(config)
-    auth_configs: dict[str, AuthConfig] = {"global": settings.auth}
+    auth_configs: dict[str, AuthConfig] = {}
+    if settings.auth:
+        auth_configs["global"] = settings.auth
     for name, project in settings.projects.items():
         if project.auth:
             auth_configs[f"project:{name}"] = project.auth
@@ -141,7 +143,7 @@ def env_cmd(
         )
         raise typer.Exit(1)
 
-    auth = proj.auth or settings.auth
+    auth = resolve_auth(proj, settings)
     env = environment or proj.environment
 
     with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
@@ -181,7 +183,7 @@ def write_file(
         )
         raise typer.Exit(1)
 
-    auth = proj.auth or settings.auth
+    auth = resolve_auth(proj, settings)
 
     with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
         token = client.ensure_token(auth)

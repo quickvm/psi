@@ -9,6 +9,7 @@ from rich.console import Console
 
 from psi.api import InfisicalClient
 from psi.models import SecretMapping
+from psi.settings import resolve_auth
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
@@ -43,7 +44,7 @@ def _discover_workload_secrets(
 
     for source in workload.secrets:
         project = settings.projects[source.project]
-        auth = project.auth or settings.auth
+        auth = resolve_auth(project, settings)
         token = client.ensure_token(auth)
 
         console.print(f"  Fetching [cyan]{source.project}[/cyan] path=[cyan]{source.path}[/cyan]")

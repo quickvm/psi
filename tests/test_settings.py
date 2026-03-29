@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 import yaml
 
-from psi.settings import load_settings
+from psi.settings import load_settings, resolve_auth
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -112,3 +112,108 @@ class TestProjectReferenceValidation:
         config_file = _write_config(tmp_path, config)
         settings = load_settings(config_file)
         assert "infra" in settings.projects
+
+
+class TestAuthCoverage:
+    def test_global_auth_covers_all_projects(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "id"},
+            "projects": {
+                "a": {"id": "uuid-a"},
+                "b": {"id": "uuid-b"},
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        assert settings.auth is not None
+
+    def test_per_project_auth_no_global(self, tmp_path: Path) -> None:
+        config = {
+            "projects": {
+                "a": {
+                    "id": "uuid-a",
+                    "auth": {"method": "aws-iam", "identity_id": "id-a"},
+                },
+                "b": {
+                    "id": "uuid-b",
+                    "auth": {
+                        "method": "universal-auth",
+                        "client_id": "cid",
+                        "client_secret": "csec",
+                    },
+                },
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        assert settings.auth is None
+        assert settings.projects["a"].auth is not None
+        assert settings.projects["b"].auth is not None
+
+    def test_missing_auth_on_project_without_global(self, tmp_path: Path) -> None:
+        config = {
+            "projects": {
+                "has_auth": {
+                    "id": "uuid-a",
+                    "auth": {"method": "aws-iam", "identity_id": "id"},
+                },
+                "no_auth": {"id": "uuid-b"},
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        with pytest.raises(Exception, match="no_auth"):
+            load_settings(config_file)
+
+    def test_no_auth_anywhere(self, tmp_path: Path) -> None:
+        config = {
+            "projects": {"lonely": {"id": "uuid"}},
+        }
+        config_file = _write_config(tmp_path, config)
+        with pytest.raises(Exception, match="lonely"):
+            load_settings(config_file)
+
+    def test_mixed_auth_global_fills_gaps(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "global-id"},
+            "projects": {
+                "with_own": {
+                    "id": "uuid-a",
+                    "auth": {"method": "gcp", "identity_id": "gcp-id"},
+                },
+                "uses_global": {"id": "uuid-b"},
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        assert settings.projects["with_own"].auth is not None
+        assert settings.projects["uses_global"].auth is None
+        assert settings.auth is not None
+
+
+class TestResolveAuth:
+    def test_project_auth_wins(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "global"},
+            "projects": {
+                "p": {
+                    "id": "uuid",
+                    "auth": {"method": "gcp", "identity_id": "project-gcp"},
+                },
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        auth = resolve_auth(settings.projects["p"], settings)
+        assert auth.method.value == "gcp"
+        assert auth.identity_id == "project-gcp"
+
+    def test_falls_back_to_global(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "global"},
+            "projects": {"p": {"id": "uuid"}},
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        auth = resolve_auth(settings.projects["p"], settings)
+        assert auth.method.value == "aws-iam"
+        assert auth.identity_id == "global"

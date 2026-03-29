@@ -27,7 +27,7 @@ class PsiSettings(BaseSettings):
     )
 
     api_url: str = "https://app.infisical.com"
-    auth: AuthConfig
+    auth: AuthConfig | None = None
     state_dir: Path = Path("/var/lib/psi")
     systemd_dir: Path = Path("/etc/containers/systemd")
     token: TokenSettings = TokenSettings()
@@ -49,6 +49,21 @@ class PsiSettings(BaseSettings):
             env_settings,
             YamlConfigSettingsSource(settings_cls),
         )
+
+    @model_validator(mode="after")
+    def validate_auth_coverage(self) -> PsiSettings:
+        """Ensure every project has auth (own or global fallback)."""
+        if self.auth:
+            return self
+        missing = [name for name, proj in self.projects.items() if not proj.auth]
+        if missing:
+            msg = (
+                f"No global auth and no per-project auth for: "
+                f"{', '.join(missing)}. Either set top-level 'auth' "
+                f"or add 'auth' to each project."
+            )
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def validate_project_references(self) -> PsiSettings:
@@ -73,6 +88,15 @@ class PsiSettings(BaseSettings):
                     )
                     raise ValueError(msg)
         return self
+
+
+def resolve_auth(project: ProjectConfig, settings: PsiSettings) -> AuthConfig:
+    """Resolve auth for a project: project-level auth wins, then global."""
+    auth = project.auth or settings.auth
+    if not auth:
+        msg = f"No auth configured for project '{project.id}'"
+        raise ValueError(msg)
+    return auth
 
 
 def load_settings(config_path: Path | None = None) -> PsiSettings:

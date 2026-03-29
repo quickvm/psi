@@ -17,6 +17,8 @@ from psi.models import SecretMapping, SecretStatus, WorkloadStatus
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
+from psi.settings import resolve_auth
+
 
 def store(settings: PsiSettings) -> None:
     """Store a secret mapping. Called by Podman with SECRET_ID env var."""
@@ -46,7 +48,7 @@ def lookup(settings: PsiSettings) -> None:
     if not project:
         _fail(f"Secret {secret_id} references unknown project '{mapping.project_alias}'")
 
-    auth = project.auth or settings.auth
+    auth = resolve_auth(project, settings)
 
     with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
         token = client.ensure_token(auth)

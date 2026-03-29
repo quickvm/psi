@@ -13,6 +13,7 @@ from rich.table import Table
 
 from psi.api import InfisicalClient
 from psi.models import CertState, CertStatusInfo
+from psi.settings import resolve_auth
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -268,7 +269,7 @@ def _issue_one(
 ) -> None:
     """Issue a single certificate."""
     project = settings.projects[cert_config.project]
-    auth = project.auth or settings.auth
+    auth = resolve_auth(project, settings)
     token = client.ensure_token(auth)
 
     alt_names = (
@@ -316,7 +317,7 @@ def _renew_one(
 ) -> None:
     """Renew a single certificate."""
     project = settings.projects[cert_config.project]
-    auth = project.auth or settings.auth
+    auth = resolve_auth(project, settings)
     token = client.ensure_token(auth)
 
     console.print(f"  Renewing certificate ID {old_state.certificate_id[:12]}...")
