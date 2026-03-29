@@ -24,13 +24,13 @@ steps:
     key: build
     steps:
       - label: ":docker: Build Container"
-        command:
-          - SHORT_SHA=$(echo "$BUILDKITE_COMMIT" | cut -c1-7)
-          - IMAGE="ghcr.io/quickvm/psi"
-          - podman build -t "$IMAGE:sha-$SHORT_SHA" -f Containerfile .
-          - podman push "$IMAGE:sha-$SHORT_SHA"
-          - |
-            if [ "$BUILDKITE_BRANCH" = "master" ]; then
-              podman tag "$IMAGE:sha-$SHORT_SHA" "$IMAGE:latest"
-              podman push "$IMAGE:latest"
-            fi
+        command: |
+          set -euo pipefail
+          SHORT_SHA=$$(echo "$$BUILDKITE_COMMIT" | cut -c1-7)
+          IMAGE="ghcr.io/quickvm/psi"
+          podman build -t "$$IMAGE:sha-$$SHORT_SHA" -f Containerfile .
+          podman push "$$IMAGE:sha-$$SHORT_SHA"
+          if [ "$$BUILDKITE_BRANCH" = "master" ]; then
+            podman tag "$$IMAGE:sha-$$SHORT_SHA" "$$IMAGE:latest"
+            podman push "$$IMAGE:latest"
+          fi
