@@ -111,5 +111,5 @@ def load_settings(config_path: Path | None = None) -> PsiSettings:
                 env_prefix="PSI_",
             )
 
-        return _Settings()  # type: ignore[call-arg]  # pydantic-settings loads from YAML
-    return PsiSettings()  # type: ignore[call-arg]  # pydantic-settings loads from YAML
+        return _Settings()  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML
+    return PsiSettings()  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML
