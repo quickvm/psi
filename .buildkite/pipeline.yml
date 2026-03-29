@@ -1,0 +1,48 @@
+steps:
+  - group: ":pytest: Tests"
+    key: tests
+    steps:
+      - label: ":ruff: Lint & Format"
+        command:
+          - uv sync
+          - uv run ruff check psi/ tests/
+          - uv run ruff format --check psi/ tests/
+        plugins:
+          - docker#v5.12.0:
+              image: "ghcr.io/astral-sh/uv:python3.14-bookworm-slim"
+              propagate-uid-gid: true
+
+      - label: ":ty: Type Check"
+        command:
+          - uv sync
+          - uv run ty check
+        plugins:
+          - docker#v5.12.0:
+              image: "ghcr.io/astral-sh/uv:python3.14-bookworm-slim"
+              propagate-uid-gid: true
+
+      - label: ":pytest: Unit Tests"
+        command:
+          - uv sync
+          - uv run pytest -q
+        plugins:
+          - docker#v5.12.0:
+              image: "ghcr.io/astral-sh/uv:python3.14-bookworm-slim"
+              propagate-uid-gid: true
+
+  - wait: ~
+
+  - group: ":docker: Build"
+    key: build
+    steps:
+      - label: ":docker: Build Container"
+        commands:
+          - SHORT_SHA=$$(echo "$$BUILDKITE_COMMIT" | cut -c1-7)
+          - IMAGE="ghcr.io/quickvm/psi"
+          - podman build -t "$$IMAGE:sha-$$SHORT_SHA" -f Containerfile .
+          - podman push "$$IMAGE:sha-$$SHORT_SHA"
+          - |
+            if [ "$$BUILDKITE_BRANCH" = "master" ]; then
+              podman tag "$$IMAGE:sha-$$SHORT_SHA" "$$IMAGE:latest"
+              podman push "$$IMAGE:latest"
+            fi

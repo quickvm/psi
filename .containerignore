@@ -1,0 +1,15 @@
+.git/
+.venv/
+.ruff_cache/
+.pytest_cache/
+.buildkite/
+.claude/
+dist/
+build/
+tests/
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+.gitignore
+.containerignore
