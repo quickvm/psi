@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 from rich.console import Console
@@ -37,6 +37,12 @@ systemd_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(systemd_app)
+import_app = typer.Typer(
+    name="import",
+    help="Import secrets into Infisical from external sources.",
+    no_args_is_help=True,
+)
+app.add_typer(import_app)
 
 console = Console()
 
@@ -349,6 +355,256 @@ def systemd_install(
 
     settings = load_settings(config)
     install_systemd_units(settings, deploy_mode, image, enable)
+
+
+# --- Import subcommands ---
+
+
+ConflictOption = Annotated[
+    str,
+    typer.Option(
+        "--conflict",
+        help="Conflict policy: skip, overwrite, or fail.",
+    ),
+]
+DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Preview without writing.")]
+ProjectOption = Annotated[str, typer.Option("--project", help="Project alias from config.")]
+ImportPathOption = Annotated[str, typer.Option("--path", help="Infisical folder path.")]
+EnvironmentOption = Annotated[
+    str | None, typer.Option("--environment", help="Override project environment.")
+]
+
+
+def _run_import_and_display(
+    settings: Any,
+    project_alias: str,
+    secret_path: str,
+    environment: str | None,
+    secrets: list[Any],
+    conflict: str,
+    dry_run: bool,
+    json_output: bool,
+) -> None:
+    """Shared logic for import subcommands."""
+    from rich.table import Table
+
+    from psi.api import InfisicalClient
+    from psi.importer import run_import
+    from psi.models import ConflictPolicy
+    from psi.output import render_or_json
+
+    proj = settings.projects.get(project_alias)
+    if not proj:
+        console.print(
+            f"[red]Unknown project '{project_alias}'. "
+            f"Available: {', '.join(settings.projects)}[/red]"
+        )
+        raise typer.Exit(1)
+
+    auth = resolve_auth(proj, settings)
+    env = environment or proj.environment
+
+    if not secrets:
+        console.print("[yellow]No secrets found to import.[/yellow]")
+        raise typer.Exit(0)
+
+    with InfisicalClient.from_settings(settings) as client:
+        token = client.ensure_token(auth)
+        result = run_import(
+            client,
+            token,
+            proj.id,
+            env,
+            secret_path,
+            secrets,
+            conflict=ConflictPolicy(conflict),
+            dry_run=dry_run,
+        )
+
+    table = Table(title="Import Results")
+    table.add_column("Key")
+    table.add_column("Outcome")
+    table.add_column("Detail")
+
+    style_map = {
+        "created": "green",
+        "skipped": "yellow",
+        "overwritten": "cyan",
+        "failed": "red",
+        "dry_run": "dim",
+    }
+    for s in result.secrets:
+        style = style_map.get(s.outcome, "")
+        table.add_row(s.key, f"[{style}]{s.outcome}[/{style}]", s.detail)
+
+    render_or_json(table, result.secrets, force_json=json_output)
+
+    console.print(
+        f"\n[bold]Total: {result.total}[/bold] "
+        f"[green]Created: {result.created}[/green] "
+        f"[yellow]Skipped: {result.skipped}[/yellow] "
+        f"[cyan]Overwritten: {result.overwritten}[/cyan] "
+        f"[red]Failed: {result.failed}[/red]"
+    )
+
+    if result.failed > 0:
+        raise typer.Exit(1)
+
+
+@import_app.command(name="env-file")
+def import_env_file(
+    file: Annotated[
+        Path | None,
+        typer.Argument(help="Path to .env file, or omit for stdin."),
+    ] = None,
+    project: ProjectOption = "",
+    secret_path: ImportPathOption = "/",
+    environment: EnvironmentOption = None,
+    conflict: ConflictOption = "fail",
+    dry_run: DryRunOption = False,
+    json_output: JsonOption = False,
+    config: ConfigOption = None,
+) -> None:
+    """Import secrets from a KEY=VALUE env file."""
+    from psi.importer import read_env_file
+
+    settings = load_settings(config)
+    secrets = read_env_file(file)
+    _run_import_and_display(
+        settings,
+        project,
+        secret_path,
+        environment,
+        secrets,
+        conflict,
+        dry_run,
+        json_output,
+    )
+
+
+@import_app.command(name="podman-secret")
+def import_podman_secret(
+    name: Annotated[
+        list[str] | None,
+        typer.Option("--name", help="Secret name (repeatable)."),
+    ] = None,
+    all_secrets: Annotated[bool, typer.Option("--all", help="Import all podman secrets.")] = False,
+    project: ProjectOption = "",
+    secret_path: ImportPathOption = "/",
+    environment: EnvironmentOption = None,
+    conflict: ConflictOption = "fail",
+    dry_run: DryRunOption = False,
+    json_output: JsonOption = False,
+    config: ConfigOption = None,
+) -> None:
+    """Import secrets from Podman's secret store."""
+    from psi.importer import read_podman_secrets
+
+    if not name and not all_secrets:
+        console.print("[red]Specify --name or --all.[/red]")
+        raise typer.Exit(1)
+
+    settings = load_settings(config)
+    secrets = read_podman_secrets(None if all_secrets else name)
+    _run_import_and_display(
+        settings,
+        project,
+        secret_path,
+        environment,
+        secrets,
+        conflict,
+        dry_run,
+        json_output,
+    )
+
+
+@import_app.command(name="quadlet")
+def import_quadlet(
+    files: Annotated[
+        list[Path],
+        typer.Argument(help="One or more .container file paths."),
+    ],
+    project: ProjectOption = "",
+    secret_path: ImportPathOption = "/",
+    environment: EnvironmentOption = None,
+    resolve_secrets: Annotated[
+        bool,
+        typer.Option(
+            "--resolve-secrets",
+            help="Resolve Secret= refs via podman inspect.",
+        ),
+    ] = False,
+    conflict: ConflictOption = "fail",
+    dry_run: DryRunOption = False,
+    json_output: JsonOption = False,
+    config: ConfigOption = None,
+) -> None:
+    """Import secrets from quadlet .container files."""
+    from psi.importer import read_quadlet
+
+    settings = load_settings(config)
+    secrets = read_quadlet(files, resolve_secrets=resolve_secrets)
+    _run_import_and_display(
+        settings,
+        project,
+        secret_path,
+        environment,
+        secrets,
+        conflict,
+        dry_run,
+        json_output,
+    )
+
+
+@import_app.command(name="workload")
+def import_workload(
+    name: Annotated[str, typer.Argument(help="Workload name from config.")],
+    resolve_secrets: Annotated[
+        bool,
+        typer.Option(
+            "--resolve-secrets",
+            help="Resolve Secret= refs via podman inspect.",
+        ),
+    ] = False,
+    conflict: ConflictOption = "fail",
+    dry_run: DryRunOption = False,
+    json_output: JsonOption = False,
+    config: ConfigOption = None,
+) -> None:
+    """Import secrets from a workload's configured quadlet unit file."""
+    from psi.importer import read_quadlet
+
+    settings = load_settings(config)
+    workload = settings.workloads.get(name)
+    if not workload:
+        console.print(
+            f"[red]Unknown workload '{name}'. Available: {', '.join(settings.workloads)}[/red]"
+        )
+        raise typer.Exit(1)
+    if not workload.unit:
+        console.print(f"[red]Workload '{name}' has no 'unit' configured.[/red]")
+        raise typer.Exit(1)
+    if not workload.secrets:
+        console.print(f"[red]Workload '{name}' has no secret sources configured.[/red]")
+        raise typer.Exit(1)
+
+    unit_path = settings.systemd_dir / workload.unit
+    if not unit_path.exists():
+        console.print(f"[red]Unit file not found: {unit_path}[/red]")
+        raise typer.Exit(1)
+
+    source = workload.secrets[0]
+    secrets = read_quadlet([unit_path], resolve_secrets=resolve_secrets)
+    _run_import_and_display(
+        settings,
+        source.project,
+        source.path,
+        None,
+        secrets,
+        conflict,
+        dry_run,
+        json_output,
+    )
 
 
 def main() -> None:

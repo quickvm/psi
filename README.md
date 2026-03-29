@@ -153,19 +153,23 @@ The container sees `DATABASE_HOST` — the namespace prefix is transparent.
 ## CLI
 
 ```
-psi setup              Discover secrets, register with Podman, generate drop-ins
-psi secret store       Shell driver: store mapping (called by Podman)
-psi secret lookup      Shell driver: fetch secret value (called by Podman)
-psi secret delete      Shell driver: remove mapping (called by Podman)
-psi secret list        Shell driver: list registered secrets (called by Podman)
-psi secret status      Show workload secrets status (Rich table or JSON)
-psi tls issue          Issue all configured TLS certificates
-psi tls renew          Renew certificates approaching expiry
-psi tls status         Show certificate status, expiry, and systemd timer info
-psi write-file         Fetch a secret and write it to a file
-psi login              Test authentication
-psi install            Generate containers.conf.d/psi.conf + state directory
-psi systemd install    Generate systemd units (native or container mode)
+psi setup                   Discover secrets, register with Podman, generate drop-ins
+psi secret store            Shell driver: store mapping (called by Podman)
+psi secret lookup           Shell driver: fetch secret value (called by Podman)
+psi secret delete           Shell driver: remove mapping (called by Podman)
+psi secret list             Shell driver: list registered secrets (called by Podman)
+psi secret status           Show workload secrets status (Rich table or JSON)
+psi import env-file         Import from KEY=VALUE env file
+psi import podman-secret    Import from Podman secret store
+psi import quadlet          Import from quadlet .container files
+psi import workload         Import from a workload's configured unit file
+psi tls issue               Issue all configured TLS certificates
+psi tls renew               Renew certificates approaching expiry
+psi tls status              Show certificate status, expiry, and systemd timer info
+psi write-file              Fetch a secret and write it to a file
+psi login                   Test authentication
+psi install                 Generate containers.conf.d/psi.conf + state directory
+psi systemd install         Generate systemd units (native or container mode)
 ```
 
 All commands accept `--config/-c` or the `PSI_CONFIG` env var (default: `/etc/psi/config.yaml`).
@@ -197,6 +201,101 @@ psi write-file CA_CERT /etc/ssl/ca.crt \
   --base64 \
   --mode 0644
 ```
+
+## Importing secrets
+
+`psi import` writes secrets INTO Infisical from external sources. This is useful for migrating
+existing secrets from Podman, env files, or quadlet configurations into Infisical.
+
+### From an env file
+
+```bash
+# Import from a .env file
+psi import env-file /path/to/.env --project myproject --path /myapp
+
+# From stdin
+cat secrets.env | psi import env-file --project myproject --path /myapp
+
+# Preview without writing
+psi import env-file .env --project myproject --path /myapp --dry-run
+```
+
+### From Podman secrets
+
+```bash
+# Import specific secrets
+psi import podman-secret --name DB_PASS --name API_KEY --project myproject --path /myapp
+
+# Import all podman secrets
+psi import podman-secret --all --project myproject --path /myapp
+```
+
+### From quadlet files
+
+```bash
+# Import Environment= values from .container files
+psi import quadlet /etc/containers/systemd/myapp.container --project myproject --path /myapp
+
+# Also resolve Secret= references via podman inspect
+psi import quadlet /etc/containers/systemd/*.container \
+  --project myproject --path /myapp --resolve-secrets
+```
+
+### From workload config
+
+If your workload has a `unit` field in the psi config, you can import directly from it:
+
+```yaml
+workloads:
+  homeassistant:
+    unit: homeassistant.container
+    secrets:
+      - project: myproject
+        path: /homeassistant
+```
+
+```bash
+# Reads the unit file and imports into the workload's configured project/path
+psi import workload homeassistant
+
+# Resolve Secret= refs too
+psi import workload homeassistant --resolve-secrets
+```
+
+### Conflict handling
+
+When a secret already exists in Infisical, the `--conflict` flag controls behavior:
+
+| Policy | Behavior |
+|--------|----------|
+| `fail` (default) | Exit with error if any secret exists |
+| `skip` | Keep the existing value, skip the import |
+| `overwrite` | Replace the existing value |
+
+### Environment override
+
+By default, secrets are imported into the project's configured environment (e.g., `prod`).
+Use `--environment` to override:
+
+```bash
+psi import env-file .env --project myproject --path /myapp --environment staging
+```
+
+## Permissions
+
+psi requires an Infisical machine identity with appropriate permissions. The required permissions
+depend on which features you use:
+
+| Feature | Required Permissions |
+|---------|---------------------|
+| `psi setup`, `psi secret lookup` (read secrets) | `secrets.read` |
+| `psi import` (create new secrets) | `secrets.read`, `secrets.create` |
+| `psi import --conflict overwrite` (update existing) | `secrets.read`, `secrets.create`, `secrets.edit` |
+| `psi tls issue`, `psi tls renew` | Certificate authority permissions |
+
+For read-only operation (the default use case), a role with `secrets.read` on the relevant
+environment and folder paths is sufficient. For importing, the identity also needs `secrets.create`
+and optionally `secrets.edit`.
 
 ## TLS certificates
 

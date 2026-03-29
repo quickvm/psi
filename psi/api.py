@@ -114,6 +114,92 @@ class InfisicalClient:
         resp.raise_for_status()
         return resp.json()["secret"]["secretValue"]
 
+    # --- Secret write methods ---
+
+    def create_secret(
+        self,
+        token: str,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        secret_name: str,
+        secret_value: str,
+    ) -> dict[str, Any]:
+        """Create a single secret in Infisical.
+
+        Returns:
+            The created secret object.
+        """
+        resp = self._client.post(
+            f"{self.api_url}/api/v4/secrets/{secret_name}",
+            json={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "secretValue": secret_value,
+                "type": "shared",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_secrets_batch(
+        self,
+        token: str,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        secrets: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        """Create multiple secrets in a single request.
+
+        Args:
+            secrets: List of dicts with 'secretKey' and 'secretValue'.
+
+        Returns:
+            The API response with created secrets.
+        """
+        resp = self._client.post(
+            f"{self.api_url}/api/v4/secrets/batch",
+            json={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "secrets": secrets,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def update_secret(
+        self,
+        token: str,
+        project_id: str,
+        environment: str,
+        secret_path: str,
+        secret_name: str,
+        secret_value: str,
+    ) -> dict[str, Any]:
+        """Update an existing secret's value in Infisical.
+
+        Returns:
+            The updated secret object.
+        """
+        resp = self._client.patch(
+            f"{self.api_url}/api/v4/secrets/{secret_name}",
+            json={
+                "projectId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "secretValue": secret_value,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # --- TLS certificate methods ---
 
     def issue_certificate(

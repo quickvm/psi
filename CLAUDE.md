@@ -69,13 +69,15 @@ psi/
 ├── output.py       TTY-aware output — Rich tables for terminals, JSON for pipes
 ├── unitgen.py      Pure generators for systemd unit/quadlet file contents
 ├── installer.py    Orchestrate systemd unit installation (native + container modes)
+├── importer.py     Import sources (env-file, podman-secret, quadlet) + orchestration
 └── cli.py          Typer CLI — thin wrappers over the above modules
 ```
 
 ### Module dependencies (import direction)
 
 ```
-cli.py → settings.py, setup.py, secret.py, tls.py, api.py, output.py, systemd.py, installer.py
+cli.py → settings.py, setup.py, secret.py, tls.py, api.py, output.py, systemd.py, installer.py, importer.py
+importer.py → api.py, models.py
 installer.py → unitgen.py, models.py, settings.py (TYPE_CHECKING)
 unitgen.py → settings.py (TYPE_CHECKING)
 setup.py → api.py, models.py, settings.py (TYPE_CHECKING)
@@ -132,6 +134,9 @@ tls:                             # optional
 - Auth: `POST /api/v1/auth/{universal-auth,aws-auth,gcp-auth,azure-auth}/login`
 - List secrets: `GET /api/v4/secrets` (with `recursive=true`)
 - Get secret: `GET /api/v4/secrets/{secretName}`
+- Create secret: `POST /api/v4/secrets/{secretName}`
+- Create batch: `POST /api/v4/secrets/batch`
+- Update secret: `PATCH /api/v4/secrets/{secretName}`
 - Issue cert: `POST /api/v1/cert-manager/certificates`
 - Renew cert: `POST /api/v1/cert-manager/certificates/{id}/renew`
 

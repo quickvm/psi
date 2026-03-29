@@ -76,6 +76,7 @@ class SecretSource(BaseModel):
 class WorkloadConfig(BaseModel):
     """Secrets configuration for a container workload."""
 
+    unit: str | None = None
     secrets: list[SecretSource]
 
 
@@ -180,6 +181,54 @@ class CertState(BaseModel):
     issued_at: float
     expires_at: float
     profile_id: str
+
+
+# --- Import models ---
+
+
+class ConflictPolicy(StrEnum):
+    """How to handle secrets that already exist in Infisical."""
+
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+    FAIL = "fail"
+
+
+class ImportSecret(BaseModel):
+    """A secret key-value pair read from an import source."""
+
+    key: str
+    value: str
+    source: str = ""
+
+
+class ImportOutcome(StrEnum):
+    """Result of importing a single secret."""
+
+    CREATED = "created"
+    SKIPPED = "skipped"
+    OVERWRITTEN = "overwritten"
+    FAILED = "failed"
+    DRY_RUN = "dry_run"
+
+
+class ImportSecretResult(BaseModel):
+    """Result of importing a single secret."""
+
+    key: str
+    outcome: ImportOutcome
+    detail: str = ""
+
+
+class ImportResult(BaseModel):
+    """Summary of an import operation."""
+
+    total: int
+    created: int
+    skipped: int
+    overwritten: int
+    failed: int
+    secrets: list[ImportSecretResult]
 
 
 # --- Status output models ---
