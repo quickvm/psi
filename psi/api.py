@@ -23,14 +23,25 @@ class InfisicalClient:
         api_url: str,
         state_dir: Any,
         token_ttl: int,
+        verify_ssl: bool = True,
     ) -> None:
         self.api_url = api_url
         self.state_dir = state_dir
         self.token_ttl = token_ttl
-        self._client = httpx.Client(timeout=_TIMEOUT)
+        self._client = httpx.Client(timeout=_TIMEOUT, verify=verify_ssl)
 
     def close(self) -> None:
         self._client.close()
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> InfisicalClient:
+        """Create a client from PsiSettings."""
+        return cls(
+            settings.api_url,
+            settings.state_dir,
+            settings.token.ttl,
+            getattr(settings, "verify_ssl", True),
+        )
 
     def __enter__(self) -> InfisicalClient:
         return self

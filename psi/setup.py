@@ -21,7 +21,7 @@ def run_setup(settings: PsiSettings) -> None:
     """Discover secrets for all workloads, register, and generate drop-ins."""
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
-    with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
+    with InfisicalClient.from_settings(settings) as client:
         for workload_name, _workload in settings.workloads.items():
             console.print(f"\n[bold]Workload: {workload_name}[/bold]")
             merged = _discover_workload_secrets(client, settings, workload_name)

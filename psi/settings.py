@@ -28,6 +28,7 @@ class PsiSettings(BaseSettings):
 
     api_url: str = "https://app.infisical.com"
     auth: AuthConfig | None = None
+    verify_ssl: bool = True
     state_dir: Path = Path("/var/lib/psi")
     systemd_dir: Path = Path("/etc/containers/systemd")
     token: TokenSettings = TokenSettings()

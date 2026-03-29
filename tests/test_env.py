@@ -43,8 +43,9 @@ def mock_infisical():
 
         client_instance = MagicMock()
         client_instance.ensure_token.return_value = "fake-token"
-        mock_client_cls.return_value.__enter__ = MagicMock(return_value=client_instance)
-        mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_client_cls.from_settings.return_value = client_instance
+        client_instance.__enter__ = MagicMock(return_value=client_instance)
+        client_instance.__exit__ = MagicMock(return_value=False)
 
         yield settings, client_instance
 

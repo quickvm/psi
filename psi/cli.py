@@ -76,7 +76,7 @@ def login(config: ConfigOption = None) -> None:
         if project.auth:
             auth_configs[f"project:{name}"] = project.auth
 
-    with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
+    with InfisicalClient.from_settings(settings) as client:
         for label, auth in auth_configs.items():
             try:
                 client.ensure_token(auth)
@@ -146,7 +146,7 @@ def env_cmd(
     auth = resolve_auth(proj, settings)
     env = environment or proj.environment
 
-    with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
+    with InfisicalClient.from_settings(settings) as client:
         token = client.ensure_token(auth)
         secrets = client.list_secrets(token, proj.id, env, secret_path)
 
@@ -185,7 +185,7 @@ def write_file(
 
     auth = resolve_auth(proj, settings)
 
-    with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
+    with InfisicalClient.from_settings(settings) as client:
         token = client.ensure_token(auth)
         value = client.get_secret(token, proj.id, proj.environment, secret_path, secret_name)
 

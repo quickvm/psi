@@ -39,6 +39,32 @@ podman build -t psi .
 
 Requires Python 3.14+. Type checked with [ty](https://github.com/astral-sh/ty).
 
+### Running in a container
+
+When running psi in a container, mount the config file and state directory:
+
+```bash
+podman run --rm \
+    -v /etc/psi/config.yaml:/etc/psi/config.yaml:ro \
+    -v /var/lib/psi:/var/lib/psi:Z \
+    ghcr.io/quickvm/psi:latest login
+```
+
+If your Infisical instance uses a private CA or self-signed certificate, mount the host CA bundle
+and set `SSL_CERT_FILE`:
+
+```bash
+podman run --rm \
+    -v /etc/psi/config.yaml:/etc/psi/config.yaml:ro \
+    -v /var/lib/psi:/var/lib/psi:Z \
+    -v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro \
+    -e SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    ghcr.io/quickvm/psi:latest login
+```
+
+For testing, you can disable TLS verification in the config (`verify_ssl: false`), but this is not
+recommended for production.
+
 ## Configuration
 
 Create `/etc/psi/config.yaml`:

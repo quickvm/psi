@@ -50,7 +50,7 @@ def lookup(settings: PsiSettings) -> None:
 
     auth = resolve_auth(project, settings)
 
-    with InfisicalClient(settings.api_url, settings.state_dir, settings.token.ttl) as client:
+    with InfisicalClient.from_settings(settings) as client:
         token = client.ensure_token(auth)
         value = client.get_secret(
             token,
