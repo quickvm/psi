@@ -372,7 +372,9 @@ ConflictOption = Annotated[
     ),
 ]
 DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Preview without writing.")]
-ProjectOption = Annotated[str, typer.Option("--project", help="Project alias from config.")]
+ProjectOption = Annotated[
+    str, typer.Option("--project", help="Project alias from config (required).")
+]
 ImportPathOption = Annotated[str, typer.Option("--path", help="Infisical folder path.")]
 EnvironmentOption = Annotated[
     str | None, typer.Option("--environment", help="Override project environment.")
@@ -461,7 +463,7 @@ def import_env_file(
         Path | None,
         typer.Argument(help="Path to .env file, or omit for stdin."),
     ] = None,
-    project: ProjectOption = "",
+    project: ProjectOption = ...,  # ty: ignore[invalid-parameter-default]  # Typer required option
     secret_path: ImportPathOption = "/",
     environment: EnvironmentOption = None,
     conflict: ConflictOption = "fail",
@@ -493,7 +495,7 @@ def import_podman_secret(
         typer.Option("--name", help="Secret name (repeatable)."),
     ] = None,
     all_secrets: Annotated[bool, typer.Option("--all", help="Import all podman secrets.")] = False,
-    project: ProjectOption = "",
+    project: ProjectOption = ...,  # ty: ignore[invalid-parameter-default]  # Typer required option
     secret_path: ImportPathOption = "/",
     environment: EnvironmentOption = None,
     conflict: ConflictOption = "fail",
@@ -528,7 +530,7 @@ def import_quadlet(
         list[Path],
         typer.Argument(help="One or more .container file paths."),
     ],
-    project: ProjectOption = "",
+    project: ProjectOption = ...,  # ty: ignore[invalid-parameter-default]  # Typer required option
     secret_path: ImportPathOption = "/",
     environment: EnvironmentOption = None,
     resolve_secrets: Annotated[
