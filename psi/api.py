@@ -139,12 +139,12 @@ class InfisicalClient:
                 json={
                     "name": segment,
                     "path": current,
-                    "projectId": project_id,
+                    "workspaceId": project_id,
                     "environment": environment,
                 },
                 headers={"Authorization": f"Bearer {token}"},
             )
-            if resp.status_code == 400:
+            if resp.status_code in (400, 409):
                 pass  # folder already exists
             else:
                 resp.raise_for_status()
