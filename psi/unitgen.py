@@ -25,8 +25,9 @@ def generate_native_setup_service(
     return (
         "[Unit]\n"
         "Description=PSI secrets setup\n"
-        "After=network-online.target\n"
+        "After=network-online.target psi-secrets.service\n"
         "Wants=network-online.target\n"
+        "Requires=psi-secrets.service\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
@@ -73,33 +74,45 @@ def generate_container_setup_quadlet(image: str, settings: PsiSettings) -> str:
     state = settings.state_dir
     systemd = settings.systemd_dir
     config_dir = settings.config_dir
-    containers_conf = _containers_conf_dir(settings.scope)
     dbus_socket = _dbus_socket_path(settings.scope)
+    podman_socket = _podman_socket_path(settings.scope)
     wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
 
     lines = [
         "[Unit]",
         "Description=PSI secrets setup",
-        "After=network-online.target",
+        "After=network-online.target psi-secrets.service",
         "Wants=network-online.target",
+        "Requires=psi-secrets.service",
         "",
         "[Container]",
         f"Image={image}",
         "Exec=setup",
         "Network=host",
+        "SecurityLabelType=container_runtime_t",
         f"Volume={config_dir}:{config_dir}:ro",
         f"Volume={state}:{state}:Z",
         f"Volume={systemd}:{systemd}:Z",
-        f"Volume={containers_conf}:{containers_conf}:Z",
+        f"Volume={podman_socket}:{podman_socket}:z",
         f"Volume={dbus_socket}:{dbus_socket}",
-        "",
-        "[Service]",
-        "Type=oneshot",
-        "RemainAfterExit=yes",
-        "",
-        "[Install]",
-        f"WantedBy={wanted_by}",
     ]
+
+    if settings.ca_cert:
+        ssl_target = "/etc/ssl/certs/ca-certificates.crt"
+        lines.append(f"Volume={settings.ca_cert}:{ssl_target}:ro")
+        lines.append(f"Environment=SSL_CERT_FILE={ssl_target}")
+
+    lines.extend(
+        [
+            "",
+            "[Service]",
+            "Type=oneshot",
+            "RemainAfterExit=yes",
+            "",
+            "[Install]",
+            f"WantedBy={wanted_by}",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -236,6 +249,14 @@ def _containers_conf_dir(scope: SystemdScope) -> Path:
     if scope == SystemdScope.USER:
         return Path.home() / ".config/containers/containers.conf.d"
     return Path("/etc/containers/containers.conf.d")
+
+
+def _podman_socket_path(scope: SystemdScope) -> str:
+    """Return the Podman socket path for the given scope."""
+    if scope == SystemdScope.USER:
+        xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        return f"{xdg}/podman/podman.sock"
+    return "/run/podman/podman.sock"
 
 
 def _dbus_socket_path(scope: SystemdScope) -> str:
