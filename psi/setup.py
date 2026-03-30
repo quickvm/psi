@@ -49,7 +49,7 @@ def run_setup(settings: PsiSettings) -> None:
 def _systemd_daemon_reload(scope: SystemdScope) -> None:
     """Reload systemd via D-Bus, falling back to systemctl."""
     try:
-        import dbus
+        import dbus  # ty: ignore[unresolved-import]  # optional extra, only in container
 
         bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
         systemd = bus.get_object(
