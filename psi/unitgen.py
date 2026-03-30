@@ -145,14 +145,15 @@ def generate_driver_conf(scope: SystemdScope) -> str:
 
     sock = socket_path(scope)
     curl = f"curl -sf --unix-socket {sock}"
+    secret_id = "$SECRET_ID"
     return (
         "[secrets]\n"
         'driver = "shell"\n'
         "\n"
         "[secrets.opts]\n"
-        f'store = "{curl} -X POST -d @- http://localhost/store"\n'
-        f'lookup = "{curl} http://localhost/lookup"\n'
-        f'delete = "{curl} -X DELETE http://localhost/delete"\n'
+        f'store = "{curl} -X POST -d @- http://localhost/store/{secret_id}"\n'
+        f'lookup = "{curl} http://localhost/lookup/{secret_id}"\n'
+        f'delete = "{curl} -X DELETE http://localhost/delete/{secret_id}"\n'
         f'list = "{curl} http://localhost/list"\n'
     )
 

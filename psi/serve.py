@@ -58,8 +58,8 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
                 self._respond(200, b"ok")
                 return
 
-            if path == "/lookup":
-                self._handle_lookup()
+            if path.startswith("/lookup/"):
+                self._handle_lookup(path[len("/lookup/") :])
                 return
 
             if path == "/list":
@@ -71,8 +71,8 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.rstrip("/")
 
-            if path == "/store":
-                self._handle_store()
+            if path.startswith("/store/"):
+                self._handle_store(path[len("/store/") :])
                 return
 
             self._respond(404, b"not found")
@@ -80,14 +80,13 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
         def do_DELETE(self) -> None:  # noqa: N802
             path = self.path.rstrip("/")
 
-            if path == "/delete":
-                self._handle_delete()
+            if path.startswith("/delete/"):
+                self._handle_delete(path[len("/delete/") :])
                 return
 
             self._respond(404, b"not found")
 
-        def _handle_lookup(self) -> None:
-            secret_id = os.environ.get("SECRET_ID", "")
+        def _handle_lookup(self, secret_id: str) -> None:
             if not secret_id:
                 self._respond(400, b"SECRET_ID not set")
                 return
@@ -126,10 +125,9 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
             except Exception as e:
                 self._respond(502, str(e).encode())
 
-        def _handle_store(self) -> None:
-            secret_id = os.environ.get("SECRET_ID", "")
+        def _handle_store(self, secret_id: str) -> None:
             if not secret_id:
-                self._respond(400, b"SECRET_ID not set")
+                self._respond(400, b"secret_id required")
                 return
 
             length = int(self.headers.get("Content-Length", 0))
@@ -141,10 +139,9 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
             mapping_path.chmod(0o600)
             self._respond(200, b"ok")
 
-        def _handle_delete(self) -> None:
-            secret_id = os.environ.get("SECRET_ID", "")
+        def _handle_delete(self, secret_id: str) -> None:
             if not secret_id:
-                self._respond(400, b"SECRET_ID not set")
+                self._respond(400, b"secret_id required")
                 return
 
             mapping_path = settings.state_dir / secret_id
