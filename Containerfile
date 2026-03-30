@@ -1,3 +1,5 @@
+FROM quay.io/podman/stable:latest AS podman
+
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 
@@ -27,6 +29,7 @@ RUN apt-get update \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+COPY --from=podman /usr/bin/podman-remote /usr/local/bin/podman
 COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT ["psi"]
