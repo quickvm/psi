@@ -27,14 +27,6 @@ RUN apt-get update \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG PODMAN_VERSION=5.4.2
-ADD https://github.com/containers/podman/releases/download/v${PODMAN_VERSION}/podman-remote-static-linux_amd64.tar.gz /tmp/podman.tar.gz
-RUN tar xzf /tmp/podman.tar.gz -C /usr/local/bin \
-        --strip-components=1 \
-        --transform='s/podman-remote-static-linux_amd64/podman/' \
-    && rm /tmp/podman.tar.gz \
-    && chmod +x /usr/local/bin/podman
-
 COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT ["psi"]

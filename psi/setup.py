@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import TYPE_CHECKING
 
+import httpx
 from rich.console import Console
 
 from psi.api import InfisicalClient
@@ -15,6 +17,16 @@ if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
 console = Console()
+
+_PODMAN_API_VERSION = "v5.0.0"
+
+
+def _podman_socket_url() -> str:
+    """Return the Podman API Unix socket path."""
+    uid = os.getuid()
+    if uid == 0:
+        return "/run/podman/podman.sock"
+    return f"/run/user/{uid}/podman/podman.sock"
 
 
 def run_setup(settings: PsiSettings) -> None:
@@ -93,25 +105,25 @@ def _register_secrets(
 ) -> None:
     """Create namespaced Podman secrets with coordinate mappings.
 
-    Uses podman secret create which routes through the shell driver's
-    store handler, writing the mapping to the state dir keyed by the
-    Podman-assigned secret ID.
+    Uses the Podman REST API with driver=shell so the shell driver's
+    store handler writes the mapping to state_dir keyed by secret ID.
     """
-    for secret_name, mapping in secrets.items():
-        podman_name = f"{workload_name}--{secret_name}"
+    transport = httpx.HTTPTransport(uds=_podman_socket_url())
+    base = f"http://localhost/{_PODMAN_API_VERSION}"
 
-        # Remove existing (idempotent re-registration)
-        subprocess.run(
-            ["podman", "secret", "rm", podman_name],
-            capture_output=True,
-        )
+    with httpx.Client(transport=transport, timeout=30.0) as client:
+        for secret_name, mapping in secrets.items():
+            podman_name = f"{workload_name}--{secret_name}"
 
-        subprocess.run(
-            ["podman", "secret", "create", podman_name, "-"],
-            input=mapping.serialize().encode(),
-            check=True,
-            capture_output=True,
-        )
+            # Remove existing (idempotent re-registration)
+            client.delete(f"{base}/libpod/secrets/{podman_name}")
+
+            resp = client.post(
+                f"{base}/libpod/secrets/create",
+                params={"name": podman_name, "driver": "shell"},
+                content=mapping.serialize().encode(),
+            )
+            resp.raise_for_status()
 
     console.print(f"  Registered {len(secrets)} secrets with Podman")
 
