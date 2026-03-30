@@ -80,40 +80,54 @@ def list_secrets(settings: PsiSettings) -> None:
 
 
 def get_secret_status(settings: PsiSettings) -> list[WorkloadStatus]:
-    """Build status for all workloads from config and state dir."""
+    """Build status for all workloads from config and registered secrets."""
+    from psi.importer import _podman_api_get
+
+    all_secrets = _podman_api_get("/libpod/secrets/json").json()
+    secret_map: dict[str, str] = {}
+    for s in all_secrets:
+        secret_map[s["Spec"]["Name"]] = s["ID"]
+
     results: list[WorkloadStatus] = []
 
     for workload_name in settings.workloads:
         secrets: list[SecretStatus] = []
         prefix = f"{workload_name}--"
 
-        if settings.state_dir.exists():
-            for entry in sorted(settings.state_dir.iterdir()):
-                if (
-                    entry.is_file()
-                    and entry.name.startswith(prefix)
-                    and not entry.name.startswith(".")
-                ):
-                    secret_key = entry.name[len(prefix) :]
-                    try:
-                        mapping = SecretMapping.deserialize(entry.read_text().strip())
-                        secrets.append(
-                            SecretStatus(
-                                name=secret_key,
-                                project=mapping.project_alias,
-                                path=mapping.secret_path,
-                                registered=True,
-                            )
+        for name, secret_id in sorted(secret_map.items()):
+            if not name.startswith(prefix):
+                continue
+            secret_key = name[len(prefix) :]
+            mapping_path = settings.state_dir / secret_id
+            if mapping_path.exists():
+                try:
+                    mapping = SecretMapping.deserialize(mapping_path.read_text().strip())
+                    secrets.append(
+                        SecretStatus(
+                            name=secret_key,
+                            project=mapping.project_alias,
+                            path=mapping.secret_path,
+                            registered=True,
                         )
-                    except (ValueError, OSError):  # fmt: skip
-                        secrets.append(
-                            SecretStatus(
-                                name=secret_key,
-                                project="?",
-                                path="?",
-                                registered=False,
-                            )
+                    )
+                except ValueError, OSError:
+                    secrets.append(
+                        SecretStatus(
+                            name=secret_key,
+                            project="?",
+                            path="?",
+                            registered=False,
                         )
+                    )
+            else:
+                secrets.append(
+                    SecretStatus(
+                        name=secret_key,
+                        project="?",
+                        path="?",
+                        registered=False,
+                    )
+                )
 
         results.append(WorkloadStatus(workload=workload_name, secrets=secrets))
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -117,21 +117,34 @@ class TestFail:
 
 
 class TestGetSecretStatus:
+    def _mock_podman_secrets(self, names_and_ids: dict[str, str]) -> Any:
+        """Mock _podman_api_get to return a secret list."""
+        secrets = [{"Spec": {"Name": n}, "ID": sid} for n, sid in names_and_ids.items()]
+
+        def _get(path: str, params: dict[str, str] | None = None) -> MagicMock:
+            resp = MagicMock()
+            resp.json.return_value = secrets
+            return resp
+
+        return _get
+
     def test_workload_with_secrets(self, tmp_path: Path) -> None:
-        (tmp_path / "myapp--DB_HOST").write_text("proj:/app:DB_HOST")
-        (tmp_path / "myapp--DB_PORT").write_text("proj:/app:DB_PORT")
+        names = {"myapp--DB_HOST": "aaa111", "myapp--DB_PORT": "bbb222"}
+        (tmp_path / "aaa111").write_text("proj:/app:DB_HOST")
+        (tmp_path / "bbb222").write_text("proj:/app:DB_PORT")
         settings = _mock_settings(
             tmp_path,
             workloads={
                 "myapp": WorkloadConfig(secrets=[SecretSource(project="proj", path="/app")]),
             },
         )
-        result = get_secret_status(settings)
+        with patch("psi.importer._podman_api_get", side_effect=self._mock_podman_secrets(names)):
+            result = get_secret_status(settings)
         assert len(result) == 1
         assert result[0].workload == "myapp"
         assert len(result[0].secrets) == 2
-        names = {s.name for s in result[0].secrets}
-        assert names == {"DB_HOST", "DB_PORT"}
+        secret_names = {s.name for s in result[0].secrets}
+        assert secret_names == {"DB_HOST", "DB_PORT"}
         assert all(s.registered for s in result[0].secrets)
 
     def test_workload_no_secrets(self, tmp_path: Path) -> None:
@@ -141,19 +154,25 @@ class TestGetSecretStatus:
                 "empty": WorkloadConfig(secrets=[SecretSource(project="proj", path="/app")]),
             },
         )
-        result = get_secret_status(settings)
+        with patch(
+            "psi.importer._podman_api_get",
+            side_effect=self._mock_podman_secrets({}),
+        ):
+            result = get_secret_status(settings)
         assert len(result) == 1
         assert result[0].secrets == []
 
     def test_corrupt_mapping(self, tmp_path: Path) -> None:
-        (tmp_path / "myapp--BAD").write_text("not-valid")
+        names = {"myapp--BAD": "ccc333"}
+        (tmp_path / "ccc333").write_text("not-valid")
         settings = _mock_settings(
             tmp_path,
             workloads={
                 "myapp": WorkloadConfig(secrets=[SecretSource(project="proj", path="/app")]),
             },
         )
-        result = get_secret_status(settings)
+        with patch("psi.importer._podman_api_get", side_effect=self._mock_podman_secrets(names)):
+            result = get_secret_status(settings)
         assert len(result[0].secrets) == 1
         assert result[0].secrets[0].registered is False
         assert result[0].secrets[0].project == "?"
