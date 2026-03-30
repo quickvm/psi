@@ -461,6 +461,23 @@ def _run_import_and_display(
         raise typer.Exit(1)
 
 
+def _emit_workload_config(
+    files: list[Path],
+    project_alias: str,
+    secret_path: str,
+) -> None:
+    """Print workload config YAML for the imported quadlet files."""
+    unit_name = files[0].name
+    workload_name = unit_name.removesuffix(".container")
+
+    console.print("\n[bold]Workload config (add to config.yaml):[/bold]\n")
+    console.print(f"  [cyan]{workload_name}[/cyan]:")
+    console.print(f"    unit: {unit_name}")
+    console.print("    secrets:")
+    console.print(f"      - project: {project_alias}")
+    console.print(f"        path: {secret_path}")
+
+
 @import_app.command(name="env-file")
 def import_env_file(
     file: Annotated[
@@ -544,6 +561,13 @@ def import_quadlet(
             help="Resolve Secret= refs via podman inspect.",
         ),
     ] = False,
+    emit_config: Annotated[
+        bool,
+        typer.Option(
+            "--emit-config",
+            help="Print workload config YAML to add to config.yaml.",
+        ),
+    ] = False,
     conflict: ConflictOption = "fail",
     dry_run: DryRunOption = False,
     json_output: JsonOption = False,
@@ -564,6 +588,9 @@ def import_quadlet(
         dry_run,
         json_output,
     )
+
+    if emit_config:
+        _emit_workload_config(files, project, secret_path)
 
 
 @import_app.command(name="workload")
