@@ -290,8 +290,18 @@ def _fetch_existing_keys(
     environment: str,
     secret_path: str,
 ) -> set[str]:
-    """Fetch existing secret keys at the target path."""
-    existing = client.list_secrets(token, project_id, environment, secret_path)
+    """Fetch existing secret keys at the target path.
+
+    Returns an empty set if the folder does not exist yet (404).
+    """
+    import httpx
+
+    try:
+        existing = client.list_secrets(token, project_id, environment, secret_path)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return set()
+        raise
     return {s["secretKey"] for s in existing}
 
 
