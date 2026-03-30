@@ -138,13 +138,13 @@ def run_import(
     Pre-fetches existing secrets to detect conflicts, then batch-creates
     new secrets and individually handles existing ones per conflict policy.
     """
-    if dry_run:
-        return _dry_run_result(secrets)
-
     existing = _fetch_existing_keys(client, token, project_id, environment, secret_path)
 
     new_secrets = [s for s in secrets if s.key not in existing]
     conflicting = [s for s in secrets if s.key in existing]
+
+    if dry_run:
+        return _dry_run_result(new_secrets, conflicting, conflict)
 
     results: list[ImportSecretResult] = []
     results.extend(_batch_create(client, token, project_id, environment, secret_path, new_secrets))
@@ -245,18 +245,40 @@ def _parse_secret_directive(
     return ImportSecret(key=target, value=value, source=source)
 
 
-def _dry_run_result(secrets: list[ImportSecret]) -> ImportResult:
-    """Build a dry-run result showing what would be imported."""
-    results = [
-        ImportSecretResult(key=s.key, outcome=ImportOutcome.DRY_RUN, detail="would import")
-        for s in secrets
-    ]
+def _dry_run_result(
+    new_secrets: list[ImportSecret],
+    conflicting: list[ImportSecret],
+    conflict: ConflictPolicy,
+) -> ImportResult:
+    """Build a dry-run result showing what would happen."""
+    results: list[ImportSecretResult] = []
+
+    for s in new_secrets:
+        results.append(
+            ImportSecretResult(key=s.key, outcome=ImportOutcome.DRY_RUN, detail="would create")
+        )
+
+    for s in conflicting:
+        match conflict:
+            case ConflictPolicy.SKIP:
+                detail = "would skip (already exists)"
+            case ConflictPolicy.OVERWRITE:
+                detail = "would overwrite (already exists)"
+            case ConflictPolicy.FAIL:
+                detail = "would fail (already exists)"
+        results.append(ImportSecretResult(key=s.key, outcome=ImportOutcome.DRY_RUN, detail=detail))
+
+    would_create = len(new_secrets)
+    would_skip = sum(1 for s in conflicting if conflict == ConflictPolicy.SKIP)
+    would_overwrite = sum(1 for s in conflicting if conflict == ConflictPolicy.OVERWRITE)
+    would_fail = sum(1 for s in conflicting if conflict == ConflictPolicy.FAIL)
+
     return ImportResult(
-        total=len(secrets),
-        created=0,
-        skipped=0,
-        overwritten=0,
-        failed=0,
+        total=len(new_secrets) + len(conflicting),
+        created=would_create,
+        skipped=would_skip,
+        overwritten=would_overwrite,
+        failed=would_fail,
         secrets=results,
     )
 

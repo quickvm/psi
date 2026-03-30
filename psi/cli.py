@@ -445,15 +445,19 @@ def _run_import_and_display(
 
     render_or_json(table, result.secrets, force_json=json_output)
 
+    prefix = "Would create" if dry_run else "Created"
+    skip_prefix = "Would skip" if dry_run else "Skipped"
+    overwrite_prefix = "Would overwrite" if dry_run else "Overwritten"
+    fail_prefix = "Would fail" if dry_run else "Failed"
     console.print(
         f"\n[bold]Total: {result.total}[/bold] "
-        f"[green]Created: {result.created}[/green] "
-        f"[yellow]Skipped: {result.skipped}[/yellow] "
-        f"[cyan]Overwritten: {result.overwritten}[/cyan] "
-        f"[red]Failed: {result.failed}[/red]"
+        f"[green]{prefix}: {result.created}[/green] "
+        f"[yellow]{skip_prefix}: {result.skipped}[/yellow] "
+        f"[cyan]{overwrite_prefix}: {result.overwritten}[/cyan] "
+        f"[red]{fail_prefix}: {result.failed}[/red]"
     )
 
-    if result.failed > 0:
+    if not dry_run and result.failed > 0:
         raise typer.Exit(1)
 
 

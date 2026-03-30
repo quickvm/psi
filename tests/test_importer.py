@@ -183,7 +183,7 @@ def _mock_client() -> Any:
 
 
 class TestRunImport:
-    def test_dry_run(self) -> None:
+    def test_dry_run_all_new(self) -> None:
         from psi.models import ImportSecret
 
         secrets = [ImportSecret(key="A", value="1"), ImportSecret(key="B", value="2")]
@@ -197,8 +197,32 @@ class TestRunImport:
             dry_run=True,
         )
         assert result.total == 2
-        assert result.created == 0
+        assert result.created == 2
         assert all(s.outcome == ImportOutcome.DRY_RUN for s in result.secrets)
+        assert all("would create" in s.detail for s in result.secrets)
+
+    def test_dry_run_with_existing(self) -> None:
+        from psi.models import ImportSecret
+
+        client = _mock_client()
+        client.list_secrets.return_value = [{"secretKey": "A"}]
+        secrets = [ImportSecret(key="A", value="1"), ImportSecret(key="B", value="2")]
+        result = run_import(
+            client,
+            "tok",
+            "proj",
+            "prod",
+            "/",
+            secrets,
+            conflict=ConflictPolicy.SKIP,
+            dry_run=True,
+        )
+        assert result.total == 2
+        assert result.created == 1
+        assert result.skipped == 1
+        details = {s.key: s.detail for s in result.secrets}
+        assert "would create" in details["B"]
+        assert "would skip" in details["A"]
 
     def test_creates_new_secrets(self) -> None:
         from psi.models import ImportSecret
