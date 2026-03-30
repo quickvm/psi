@@ -41,6 +41,16 @@ def detect_scope() -> SystemdScope:
     return SystemdScope.USER
 
 
+def socket_path(scope: SystemdScope) -> Path:
+    """Return the PSI Unix socket path for the given scope."""
+    import os
+
+    if scope == SystemdScope.USER:
+        xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        return Path(xdg) / "psi/psi.sock"
+    return Path("/run/psi/psi.sock")
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration for Infisical."""
 

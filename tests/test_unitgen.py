@@ -8,10 +8,9 @@ from unittest.mock import MagicMock
 from psi.models import CertificateConfig, CertOutput, SystemdScope, TlsConfig
 from psi.unitgen import (
     collect_tls_volume_dirs,
-    generate_container_driver_conf,
     generate_container_setup_quadlet,
     generate_container_tls_renew_quadlet,
-    generate_native_driver_conf,
+    generate_driver_conf,
     generate_native_setup_service,
     generate_native_tls_renew_service,
     generate_tls_renew_timer,
@@ -104,20 +103,19 @@ class TestContainerQuadletGenerators:
         assert "Volume=/etc/traefik/tls:/etc/traefik/tls:Z" in content
 
 
-class TestDriverConfGenerators:
-    def test_native_driver_conf(self) -> None:
-        content = generate_native_driver_conf()
+class TestDriverConfGenerator:
+    def test_system_scope(self) -> None:
+        content = generate_driver_conf(SystemdScope.SYSTEM)
         assert 'driver = "shell"' in content
-        assert 'store = "psi secret store"' in content
-        assert 'lookup = "psi secret lookup"' in content
+        assert "curl -sf --unix-socket /run/psi/psi.sock" in content
+        assert "/lookup" in content
+        assert "/store" in content
 
-    def test_container_driver_conf(self, tmp_path: Path) -> None:
-        settings = _mock_settings(tmp_path)
-        content = generate_container_driver_conf("psi:latest", settings)
-        assert "podman run --rm" in content
-        assert "psi:latest" in content
-        assert "-i psi:latest secret store" in content
-        assert "--net=host psi:latest secret lookup" in content
+    def test_user_scope(self) -> None:
+        content = generate_driver_conf(SystemdScope.USER)
+        assert 'driver = "shell"' in content
+        assert "psi.sock" in content
+        assert "/lookup" in content
 
 
 class TestCollectTlsVolumeDirs:
@@ -221,9 +219,7 @@ class TestUserScopeGenerators:
         assert "WantedBy=multi-user.target" in content
         assert "/run/dbus/system_bus_socket" in content
 
-    def test_container_driver_conf_user_scope(self, tmp_path: Path) -> None:
-        settings = _mock_settings(tmp_path, scope=SystemdScope.USER)
-        content = generate_container_driver_conf("psi:latest", settings)
-        home = str(Path.home())
-        assert f"{home}/.config/psi" in content
-        assert "/etc/psi" not in content
+    def test_driver_conf_user_scope(self) -> None:
+        content = generate_driver_conf(SystemdScope.USER)
+        assert "psi.sock" in content
+        assert "/run/psi/" not in content

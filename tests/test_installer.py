@@ -13,7 +13,7 @@ from psi.installer import (
     _systemd_unit_dir,
     install_driver_conf,
 )
-from psi.models import DeployMode, SystemdScope
+from psi.models import SystemdScope
 
 
 def _mock_settings(
@@ -42,26 +42,16 @@ class TestFindPsiPath:
 
 
 class TestInstallDriverConf:
-    def test_native_mode(self, tmp_path: Path) -> None:
+    def test_writes_curl_based_conf(self, tmp_path: Path) -> None:
         conf_dir = tmp_path / "containers.conf.d"
         with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
             settings = _mock_settings(tmp_path)
-            install_driver_conf(settings, DeployMode.NATIVE, image=None)
+            install_driver_conf(settings)
 
         conf = (conf_dir / "psi.conf").read_text()
         assert 'driver = "shell"' in conf
-        assert 'store = "psi secret store"' in conf
-
-    def test_container_mode(self, tmp_path: Path) -> None:
-        conf_dir = tmp_path / "containers.conf.d"
-        with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
-            settings = _mock_settings(tmp_path)
-            settings.config_dir = Path("/etc/psi")
-            install_driver_conf(settings, DeployMode.CONTAINER, image="psi:latest")
-
-        conf = (conf_dir / "psi.conf").read_text()
-        assert "podman run --rm" in conf
-        assert "psi:latest" in conf
+        assert "curl -sf --unix-socket" in conf
+        assert "/lookup" in conf
 
     def test_creates_state_dir(self, tmp_path: Path) -> None:
         conf_dir = tmp_path / "containers.conf.d"
@@ -69,7 +59,7 @@ class TestInstallDriverConf:
         with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
             settings = _mock_settings(tmp_path)
             settings.state_dir = state_dir
-            install_driver_conf(settings, DeployMode.NATIVE, image=None)
+            install_driver_conf(settings)
 
         assert state_dir.exists()
 

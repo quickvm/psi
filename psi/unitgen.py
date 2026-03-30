@@ -135,39 +135,97 @@ def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> s
     return "\n".join(lines) + "\n"
 
 
-def generate_native_driver_conf() -> str:
-    """Generate containers.conf.d/psi.conf for native mode."""
+def generate_driver_conf(scope: SystemdScope) -> str:
+    """Generate containers.conf.d/psi.conf using the PSI serve socket.
+
+    Works for both native and container modes — the driver conf just
+    talks to the local socket. The PSI serve process handles the rest.
+    """
+    from psi.models import socket_path
+
+    sock = socket_path(scope)
+    curl = f"curl -sf --unix-socket {sock}"
     return (
         "[secrets]\n"
         'driver = "shell"\n'
         "\n"
         "[secrets.opts]\n"
-        'store = "psi secret store"\n'
-        'lookup = "psi secret lookup"\n'
-        'delete = "psi secret delete"\n'
-        'list = "psi secret list"\n'
+        f'store = "{curl} -X POST -d @- http://localhost/store"\n'
+        f'lookup = "{curl} http://localhost/lookup"\n'
+        f'delete = "{curl} -X DELETE http://localhost/delete"\n'
+        f'list = "{curl} http://localhost/list"\n'
     )
 
 
-def generate_container_driver_conf(image: str, settings: PsiSettings) -> str:
-    """Generate containers.conf.d/psi.conf for container mode."""
+def generate_native_serve_service(
+    psi_path: str,
+    scope: SystemdScope = SystemdScope.SYSTEM,
+) -> str:
+    """Generate psi-secrets.service for native mode."""
+    from psi.models import socket_path
+
+    sock = socket_path(scope)
+    runtime_dir = sock.parent
+    wanted_by = "default.target" if scope == SystemdScope.USER else "multi-user.target"
+    return (
+        "[Unit]\n"
+        "Description=PSI secret lookup service\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        "Restart=on-failure\n"
+        f"RuntimeDirectory={runtime_dir.name}\n"
+        f"ExecStart={psi_path} serve\n"
+        "\n"
+        "[Install]\n"
+        f"WantedBy={wanted_by}\n"
+    )
+
+
+def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
+    """Generate psi-secrets.container quadlet for the serve process."""
+    from psi.models import socket_path
+
     state = settings.state_dir
     config_dir = settings.config_dir
-    base = f"podman run --rm -v {state}:{state}:Z -v {config_dir}:{config_dir}:ro"
+    sock = socket_path(settings.scope)
+    runtime_dir = sock.parent
+    wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
+
+    lines = [
+        "[Unit]",
+        "Description=PSI secret lookup service",
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Container]",
+        f"Image={image}",
+        "Exec=serve",
+        "Network=host",
+        f"Volume={config_dir}:{config_dir}:ro",
+        f"Volume={state}:{state}:Z",
+        f"Volume={runtime_dir}:{runtime_dir}:Z",
+    ]
+
     if settings.ca_cert:
         ssl_target = "/etc/ssl/certs/ca-certificates.crt"
-        base += f" -v {settings.ca_cert}:{ssl_target}:ro -e SSL_CERT_FILE={ssl_target}"
-    secret_id = "-e SECRET_ID"
-    return (
-        "[secrets]\n"
-        'driver = "shell"\n'
-        "\n"
-        "[secrets.opts]\n"
-        f'store = "{base} {secret_id} -i {image} secret store"\n'
-        f'lookup = "{base} {secret_id} --net=host {image} secret lookup"\n'
-        f'delete = "{base} {secret_id} {image} secret delete"\n'
-        f'list = "{base} {image} secret list"\n'
+        lines.append(f"Volume={settings.ca_cert}:{ssl_target}:ro")
+        lines.append(f"Environment=SSL_CERT_FILE={ssl_target}")
+
+    lines.extend(
+        [
+            "",
+            "[Service]",
+            "Type=simple",
+            "Restart=on-failure",
+            "",
+            "[Install]",
+            f"WantedBy={wanted_by}",
+        ]
     )
+    return "\n".join(lines) + "\n"
 
 
 def _containers_conf_dir(scope: SystemdScope) -> Path:

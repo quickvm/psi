@@ -11,10 +11,11 @@ from rich.console import Console
 
 from psi.models import DeployMode, SystemdScope
 from psi.unitgen import (
-    generate_container_driver_conf,
+    generate_container_serve_quadlet,
     generate_container_setup_quadlet,
     generate_container_tls_renew_quadlet,
-    generate_native_driver_conf,
+    generate_driver_conf,
+    generate_native_serve_service,
     generate_native_setup_service,
     generate_native_tls_renew_service,
     generate_tls_renew_timer,
@@ -54,22 +55,12 @@ def install_systemd_units(
         _install_container(settings, image, enable)
 
 
-def install_driver_conf(
-    settings: PsiSettings,
-    mode: DeployMode,
-    image: str | None,
-) -> None:
+def install_driver_conf(settings: PsiSettings) -> None:
     """Generate and install the Podman shell driver config."""
     conf_dir = _containers_conf_dir(settings.scope)
     _ensure_dir(conf_dir)
     conf_path = conf_dir / "psi.conf"
-
-    if mode == DeployMode.NATIVE:
-        conf_path.write_text(generate_native_driver_conf())
-    else:
-        assert image is not None
-        conf_path.write_text(generate_container_driver_conf(image, settings))
-
+    conf_path.write_text(generate_driver_conf(settings.scope))
     _ensure_dir(settings.state_dir)
     console.print(f"[green]Wrote {conf_path}[/green]")
 
@@ -80,6 +71,10 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
     scope = settings.scope
     unit_dir = _systemd_unit_dir(scope)
 
+    _write_unit(
+        unit_dir / "psi-secrets.service",
+        generate_native_serve_service(psi_path, scope),
+    )
     _write_unit(
         unit_dir / "psi-secrets-setup.service",
         generate_native_setup_service(psi_path, scope),
@@ -98,7 +93,11 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
     _daemon_reload(scope)
 
     if enable:
-        _enable_units(["psi-secrets-setup.service"], settings.tls, scope)
+        _enable_units(
+            ["psi-secrets.service", "psi-secrets-setup.service"],
+            settings.tls,
+            scope,
+        )
 
 
 def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
@@ -107,6 +106,10 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
     quadlet_dir = settings.systemd_dir
     _ensure_dir(quadlet_dir)
 
+    _write_unit(
+        quadlet_dir / "psi-secrets.container",
+        generate_container_serve_quadlet(image, settings),
+    )
     _write_unit(
         quadlet_dir / "psi-secrets-setup.container",
         generate_container_setup_quadlet(image, settings),
@@ -125,7 +128,11 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
     _daemon_reload(scope)
 
     if enable:
-        _enable_units(["psi-secrets-setup.service"], settings.tls, scope)
+        _enable_units(
+            ["psi-secrets.service", "psi-secrets-setup.service"],
+            settings.tls,
+            scope,
+        )
 
 
 def _write_unit(path: Path, content: str) -> None:

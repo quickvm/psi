@@ -71,6 +71,16 @@ def setup(config: ConfigOption = None) -> None:
 
 
 @app.command()
+def serve(config: ConfigOption = None) -> None:
+    """Run the secret lookup service on a Unix socket."""
+    from psi.models import socket_path
+    from psi.serve import run_serve
+
+    settings = load_settings(config, scope=detect_scope())
+    run_serve(settings, str(socket_path(settings.scope)))
+
+
+@app.command()
 def login(config: ConfigOption = None) -> None:
     """Test authentication against Infisical."""
     from psi.api import InfisicalClient
@@ -97,25 +107,13 @@ def login(config: ConfigOption = None) -> None:
 
 @app.command()
 def install(
-    mode: Annotated[
-        str, typer.Option("--mode", help="Deployment mode: native or container.")
-    ] = "native",
-    image: Annotated[
-        str | None, typer.Option("--image", help="Container image (required for container mode).")
-    ] = None,
     config: ConfigOption = None,
 ) -> None:
     """Generate Podman shell driver config and state directory."""
     from psi.installer import install_driver_conf
-    from psi.models import DeployMode
-
-    deploy_mode = DeployMode(mode)
-    if deploy_mode == DeployMode.CONTAINER and not image:
-        console.print("[red]Container mode requires --image.[/red]")
-        raise typer.Exit(1)
 
     settings = load_settings(config, scope=detect_scope())
-    install_driver_conf(settings, deploy_mode, image)
+    install_driver_conf(settings)
 
 
 @app.command(name="env")
