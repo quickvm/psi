@@ -234,6 +234,7 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
             "[Service]",
             "Type=simple",
             "Restart=on-failure",
+            f"RuntimeDirectory={runtime_dir.name}",
             "",
             "[Install]",
             f"WantedBy={wanted_by}",
