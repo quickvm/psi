@@ -46,6 +46,7 @@ class PsiSettings(BaseSettings):
     api_url: str = "https://app.infisical.com"
     auth: AuthConfig | None = None
     verify_ssl: bool = True
+    ca_cert: Path | None = None
     state_dir: Path = _SYSTEM_STATE_DIR
     systemd_dir: Path = _SYSTEM_SYSTEMD_DIR
     token: TokenSettings = TokenSettings()

@@ -154,6 +154,9 @@ def generate_container_driver_conf(image: str, settings: PsiSettings) -> str:
     state = settings.state_dir
     config_dir = settings.config_dir
     base = f"podman run --rm -v {state}:{state}:Z -v {config_dir}:{config_dir}:ro"
+    if settings.ca_cert:
+        ssl_target = "/etc/ssl/certs/ca-certificates.crt"
+        base += f" -v {settings.ca_cert}:{ssl_target}:ro -e SSL_CERT_FILE={ssl_target}"
     return (
         "[secrets]\n"
         'driver = "shell"\n'
