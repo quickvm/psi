@@ -146,15 +146,29 @@ projects:
 workloads:
   myapp:
     unit: myapp.container
+    depends_on:
+      - psi-secrets-setup.service
     secrets:
       - project: myproject
         path: /myapp
   myapp-database:
     unit: myapp-database.container
+    depends_on:
+      - psi-secrets-setup.service
     secrets:
       - project: myproject
         path: /myapp
 ```
+
+### Workload dependencies
+
+Use `depends_on` to add systemd ordering to the generated drop-ins. Each entry is a
+systemd unit name emitted as `After=` and `Requires=` in the `[Unit]` section of
+`50-secrets.conf`. This ensures the listed units are started and healthy before the
+container starts.
+
+A common pattern is `depends_on: [psi-secrets-setup.service]` so containers wait for
+`psi setup` to register all secrets before attempting to start.
 
 ### Custom CA certificates
 

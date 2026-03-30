@@ -134,11 +134,21 @@ def _generate_drop_in(
     secrets: dict[str, SecretMapping],
 ) -> None:
     """Write a systemd drop-in mapping namespaced secrets to env vars."""
+    workload = settings.workloads[workload_name]
     drop_in_dir = settings.systemd_dir / f"{workload_name}.container.d"
     drop_in_dir.mkdir(parents=True, exist_ok=True)
     drop_in_path = drop_in_dir / "50-secrets.conf"
 
-    lines = ["[Container]"]
+    lines: list[str] = []
+
+    if workload.depends_on:
+        deps = " ".join(workload.depends_on)
+        lines.append("[Unit]")
+        lines.append(f"After={deps}")
+        lines.append(f"Requires={deps}")
+        lines.append("")
+
+    lines.append("[Container]")
     for secret_name in sorted(secrets):
         podman_name = f"{workload_name}--{secret_name}"
         lines.append(f"Secret={podman_name},type=env,target={secret_name}")

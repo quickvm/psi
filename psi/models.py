@@ -104,6 +104,7 @@ class WorkloadConfig(BaseModel):
 
     unit: str | None = None
     secrets: list[SecretSource]
+    depends_on: list[str] = []
 
 
 class SecretMapping(BaseModel):
