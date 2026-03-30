@@ -157,14 +157,15 @@ def generate_container_driver_conf(image: str, settings: PsiSettings) -> str:
     if settings.ca_cert:
         ssl_target = "/etc/ssl/certs/ca-certificates.crt"
         base += f" -v {settings.ca_cert}:{ssl_target}:ro -e SSL_CERT_FILE={ssl_target}"
+    secret_id = "-e SECRET_ID"
     return (
         "[secrets]\n"
         'driver = "shell"\n'
         "\n"
         "[secrets.opts]\n"
-        f'store = "{base} -i {image} secret store"\n'
-        f'lookup = "{base} --net=host {image} secret lookup"\n'
-        f'delete = "{base} {image} secret delete"\n'
+        f'store = "{base} {secret_id} -i {image} secret store"\n'
+        f'lookup = "{base} {secret_id} --net=host {image} secret lookup"\n'
+        f'delete = "{base} {secret_id} {image} secret delete"\n'
         f'list = "{base} {image} secret list"\n'
     )
 
