@@ -242,14 +242,18 @@ class TestUserScope:
         assert settings.systemd_dir == tmp_path / "custom-systemd"
 
     def test_user_scope_config_dir(
-        self, tmp_path: Path, sample_settings_dict: dict,
+        self,
+        tmp_path: Path,
+        sample_settings_dict: dict,
     ) -> None:
         config_file = _write_config(tmp_path, sample_settings_dict)
         settings = load_settings(config_file, scope=SystemdScope.USER)
         assert settings.config_dir == Path.home() / ".config/psi"
 
     def test_system_scope_config_dir(
-        self, tmp_path: Path, sample_settings_dict: dict,
+        self,
+        tmp_path: Path,
+        sample_settings_dict: dict,
     ) -> None:
         config_file = _write_config(tmp_path, sample_settings_dict)
         settings = load_settings(config_file, scope=SystemdScope.SYSTEM)
