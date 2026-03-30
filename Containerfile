@@ -1,5 +1,3 @@
-FROM quay.io/podman/stable:latest AS podman
-
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 
@@ -29,7 +27,14 @@ RUN apt-get update \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=podman /usr/bin/podman-remote /usr/local/bin/podman
+ARG PODMAN_VERSION=5.4.2
+ADD https://github.com/containers/podman/releases/download/v${PODMAN_VERSION}/podman-remote-static-linux_amd64.tar.gz /tmp/podman.tar.gz
+RUN tar xzf /tmp/podman.tar.gz -C /usr/local/bin \
+        --strip-components=1 \
+        --transform='s/podman-remote-static-linux_amd64/podman/' \
+    && rm /tmp/podman.tar.gz \
+    && chmod +x /usr/local/bin/podman
+
 COPY --from=builder /app /app
 ENV PATH="/app/.venv/bin:$PATH"
 ENTRYPOINT ["psi"]
