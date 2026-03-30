@@ -146,6 +146,8 @@ def run_import(
     if dry_run:
         return _dry_run_result(new_secrets, conflicting, conflict)
 
+    client.ensure_folder(token, project_id, environment, secret_path)
+
     results: list[ImportSecretResult] = []
     results.extend(_batch_create(client, token, project_id, environment, secret_path, new_secrets))
     results.extend(

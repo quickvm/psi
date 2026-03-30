@@ -114,6 +114,42 @@ class InfisicalClient:
         resp.raise_for_status()
         return resp.json()["secret"]["secretValue"]
 
+    # --- Folder methods ---
+
+    def ensure_folder(
+        self,
+        token: str,
+        project_id: str,
+        environment: str,
+        folder_path: str,
+    ) -> None:
+        """Create a folder if it does not already exist.
+
+        Splits the path into segments and creates each level.
+        For example, /atuin creates folder 'atuin' at path '/'.
+        """
+        if folder_path in ("/", ""):
+            return
+
+        segments = [s for s in folder_path.strip("/").split("/") if s]
+        current = "/"
+        for segment in segments:
+            resp = self._client.post(
+                f"{self.api_url}/api/v1/folders",
+                json={
+                    "name": segment,
+                    "path": current,
+                    "projectId": project_id,
+                    "environment": environment,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if resp.status_code == 400:
+                pass  # folder already exists
+            else:
+                resp.raise_for_status()
+            current = f"{current}{segment}/" if current.endswith("/") else f"{current}/{segment}/"
+
     # --- Secret write methods ---
 
     def create_secret(
