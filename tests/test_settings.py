@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 import yaml
 
-from psi.settings import load_settings, resolve_auth
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from psi.models import SystemdScope
+from psi.settings import default_config_path, load_settings, resolve_auth
 
 
 def _write_config(tmp_path: Path, config: dict) -> Path:
@@ -217,3 +215,59 @@ class TestResolveAuth:
         auth = resolve_auth(settings.projects["p"], settings)
         assert auth.method.value == "aws-iam"
         assert auth.identity_id == "global"
+
+
+class TestUserScope:
+    def test_user_scope_resolves_default_paths(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "id"},
+            "projects": {"p": {"id": "uuid"}},
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file, scope=SystemdScope.USER)
+        home = Path.home()
+        assert settings.state_dir == home / ".local/share/psi"
+        assert settings.systemd_dir == home / ".config/containers/systemd"
+
+    def test_user_scope_preserves_explicit_paths(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "id"},
+            "projects": {"p": {"id": "uuid"}},
+            "state_dir": str(tmp_path / "custom"),
+            "systemd_dir": str(tmp_path / "custom-systemd"),
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file, scope=SystemdScope.USER)
+        assert settings.state_dir == tmp_path / "custom"
+        assert settings.systemd_dir == tmp_path / "custom-systemd"
+
+    def test_user_scope_config_dir(
+        self, tmp_path: Path, sample_settings_dict: dict,
+    ) -> None:
+        config_file = _write_config(tmp_path, sample_settings_dict)
+        settings = load_settings(config_file, scope=SystemdScope.USER)
+        assert settings.config_dir == Path.home() / ".config/psi"
+
+    def test_system_scope_config_dir(
+        self, tmp_path: Path, sample_settings_dict: dict,
+    ) -> None:
+        config_file = _write_config(tmp_path, sample_settings_dict)
+        settings = load_settings(config_file, scope=SystemdScope.SYSTEM)
+        assert settings.config_dir == Path("/etc/psi")
+
+    def test_default_config_path_system(self) -> None:
+        assert default_config_path(SystemdScope.SYSTEM) == Path("/etc/psi/config.yaml")
+
+    def test_default_config_path_user(self) -> None:
+        expected = Path.home() / ".config/psi/config.yaml"
+        assert default_config_path(SystemdScope.USER) == expected
+
+    def test_explicit_state_dir_preserved_in_user_scope(self, tmp_path: Path) -> None:
+        config = {
+            "auth": {"method": "aws-iam", "identity_id": "id"},
+            "projects": {"p": {"id": "uuid"}},
+            "state_dir": str(tmp_path / "custom-state"),
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file, scope=SystemdScope.USER)
+        assert settings.state_dir == tmp_path / "custom-state"

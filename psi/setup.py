@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 
 from psi.api import InfisicalClient
-from psi.models import SecretMapping
+from psi.models import SecretMapping, SystemdScope
 from psi.settings import resolve_auth
 
 if TYPE_CHECKING:
@@ -29,7 +29,11 @@ def run_setup(settings: PsiSettings) -> None:
             _generate_drop_in(settings, workload_name, merged)
 
     console.print("\n[bold]Reloading systemd...[/bold]")
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    cmd = ["systemctl"]
+    if settings.scope == SystemdScope.USER:
+        cmd.append("--user")
+    cmd.append("daemon-reload")
+    subprocess.run(cmd, check=True)
     console.print("[green]Setup complete.[/green]")
 
 

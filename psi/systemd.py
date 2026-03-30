@@ -12,11 +12,15 @@ from datetime import UTC, datetime
 from psi.models import TimerInfo
 
 
-def get_timer_info(timer_name: str) -> TimerInfo | None:
+def get_timer_info(
+    timer_name: str,
+    user_mode: bool = False,
+) -> TimerInfo | None:
     """Query a systemd timer's status.
 
     Args:
         timer_name: Unit name, e.g. "psi-tls-renew.timer".
+        user_mode: If True, query the user systemd instance.
 
     Returns:
         TimerInfo or None if systemctl unavailable or unit not found.
@@ -24,6 +28,7 @@ def get_timer_info(timer_name: str) -> TimerInfo | None:
     props = _systemctl_show(
         timer_name,
         ["ActiveState", "LastTriggerUSec", "NextElapseUSecRealtime"],
+        user_mode=user_mode,
     )
     if not props:
         return None
@@ -39,24 +44,32 @@ def get_timer_info(timer_name: str) -> TimerInfo | None:
     )
 
 
-def get_unit_state(unit_name: str) -> str | None:
+def get_unit_state(unit_name: str, user_mode: bool = False) -> str | None:
     """Query a systemd unit's ActiveState.
 
     Returns:
         State string (active, inactive, failed, etc.) or None.
     """
-    props = _systemctl_show(unit_name, ["ActiveState"])
+    props = _systemctl_show(unit_name, ["ActiveState"], user_mode=user_mode)
     if not props:
         return None
     return props.get("ActiveState")
 
 
-def _systemctl_show(unit_name: str, properties: list[str]) -> dict[str, str] | None:
+def _systemctl_show(
+    unit_name: str,
+    properties: list[str],
+    user_mode: bool = False,
+) -> dict[str, str] | None:
     """Run systemctl show and parse key=value output."""
     prop_arg = ",".join(properties)
+    cmd = ["systemctl"]
+    if user_mode:
+        cmd.append("--user")
+    cmd.extend(["show", unit_name, f"--property={prop_arg}"])
     try:
         result = subprocess.run(
-            ["systemctl", "show", unit_name, f"--property={prop_arg}"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=5,

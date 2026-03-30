@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.console import Console
 
+from psi.models import detect_scope
 from psi.settings import load_settings, resolve_auth
 
 if TYPE_CHECKING:
@@ -65,7 +66,7 @@ def setup(config: ConfigOption = None) -> None:
     """Discover secrets, register with Podman, generate systemd drop-ins."""
     from psi.setup import run_setup
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     run_setup(settings)
 
 
@@ -74,7 +75,7 @@ def login(config: ConfigOption = None) -> None:
     """Test authentication against Infisical."""
     from psi.api import InfisicalClient
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     auth_configs: dict[str, AuthConfig] = {}
     if settings.auth:
         auth_configs["global"] = settings.auth
@@ -113,7 +114,7 @@ def install(
         console.print("[red]Container mode requires --image.[/red]")
         raise typer.Exit(1)
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     install_driver_conf(settings, deploy_mode, image)
 
 
@@ -141,7 +142,7 @@ def env_cmd(
     """
     from psi.api import InfisicalClient
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     proj = settings.projects.get(project)
     if not proj:
         console.print(
@@ -181,7 +182,7 @@ def write_file(
     """Fetch a secret from Infisical and write it to a file."""
     from psi.api import InfisicalClient
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     proj = settings.projects.get(project)
     if not proj:
         console.print(
@@ -214,7 +215,7 @@ def store(config: ConfigOption = None) -> None:
     """Store a secret mapping (called by Podman)."""
     from psi.secret import store as do_store
 
-    do_store(load_settings(config))
+    do_store(load_settings(config, scope=detect_scope()))
 
 
 @secret_app.command()
@@ -222,7 +223,7 @@ def lookup(config: ConfigOption = None) -> None:
     """Fetch a secret value (called by Podman)."""
     from psi.secret import lookup as do_lookup
 
-    do_lookup(load_settings(config))
+    do_lookup(load_settings(config, scope=detect_scope()))
 
 
 @secret_app.command()
@@ -230,7 +231,7 @@ def delete(config: ConfigOption = None) -> None:
     """Remove a secret mapping (called by Podman)."""
     from psi.secret import delete as do_delete
 
-    do_delete(load_settings(config))
+    do_delete(load_settings(config, scope=detect_scope()))
 
 
 @secret_app.command(name="list")
@@ -238,7 +239,7 @@ def list_cmd(config: ConfigOption = None) -> None:
     """List all registered secrets (called by Podman)."""
     from psi.secret import list_secrets
 
-    list_secrets(load_settings(config))
+    list_secrets(load_settings(config, scope=detect_scope()))
 
 
 JsonOption = Annotated[
@@ -258,7 +259,7 @@ def secret_status(
     from psi.output import render_or_json
     from psi.secret import get_secret_status
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     workloads = get_secret_status(settings)
 
     table = Table(title="Secrets")
@@ -287,7 +288,7 @@ def tls_issue(config: ConfigOption = None) -> None:
     """Issue all configured TLS certificates."""
     from psi.tls import issue_all
 
-    issue_all(load_settings(config))
+    issue_all(load_settings(config, scope=detect_scope()))
 
 
 @tls_app.command(name="renew")
@@ -295,7 +296,7 @@ def tls_renew(config: ConfigOption = None) -> None:
     """Renew certificates approaching expiry."""
     from psi.tls import renew_due
 
-    renew_due(load_settings(config))
+    renew_due(load_settings(config, scope=detect_scope()))
 
 
 @tls_app.command(name="status")
@@ -312,11 +313,14 @@ def tls_status(
     from psi.systemd import get_timer_info
     from psi.tls import build_tls_status_table, get_tls_status
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     certs = get_tls_status(settings)
     table = build_tls_status_table(certs)
 
-    timer_info = get_timer_info(timer)
+    from psi.models import SystemdScope
+
+    user_mode = settings.scope == SystemdScope.USER
+    timer_info = get_timer_info(timer, user_mode=user_mode)
     if timer_info and not json_output:
         console.print()
         console.print(f"[bold]Timer:[/bold] {timer}")
@@ -353,7 +357,7 @@ def systemd_install(
         console.print("[red]Container mode requires --image.[/red]")
         raise typer.Exit(1)
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     install_systemd_units(settings, deploy_mode, image, enable)
 
 
@@ -468,7 +472,7 @@ def import_env_file(
     """Import secrets from a KEY=VALUE env file."""
     from psi.importer import read_env_file
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     secrets = read_env_file(file)
     _run_import_and_display(
         settings,
@@ -504,7 +508,7 @@ def import_podman_secret(
         console.print("[red]Specify --name or --all.[/red]")
         raise typer.Exit(1)
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     secrets = read_podman_secrets(None if all_secrets else name)
     _run_import_and_display(
         settings,
@@ -542,7 +546,7 @@ def import_quadlet(
     """Import secrets from quadlet .container files."""
     from psi.importer import read_quadlet
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     secrets = read_quadlet(files, resolve_secrets=resolve_secrets)
     _run_import_and_display(
         settings,
@@ -574,7 +578,7 @@ def import_workload(
     """Import secrets from a workload's configured quadlet unit file."""
     from psi.importer import read_quadlet
 
-    settings = load_settings(config)
+    settings = load_settings(config, scope=detect_scope())
     workload = settings.workloads.get(name)
     if not workload:
         console.print(

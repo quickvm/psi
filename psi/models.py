@@ -25,6 +25,22 @@ class DeployMode(StrEnum):
     CONTAINER = "container"
 
 
+class SystemdScope(StrEnum):
+    """System vs user-level systemd scope, detected from UID."""
+
+    SYSTEM = "system"
+    USER = "user"
+
+
+def detect_scope() -> SystemdScope:
+    """Detect systemd scope from the running UID."""
+    import os
+
+    if os.getuid() == 0:
+        return SystemdScope.SYSTEM
+    return SystemdScope.USER
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration for Infisical."""
 

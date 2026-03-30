@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import unittest.mock
+
 import pytest
 
 from psi.models import (
@@ -9,6 +11,8 @@ from psi.models import (
     AuthMethod,
     DeployMode,
     SecretMapping,
+    SystemdScope,
+    detect_scope,
 )
 
 
@@ -109,3 +113,17 @@ class TestDeployMode:
     def test_values(self) -> None:
         assert DeployMode.NATIVE == "native"
         assert DeployMode.CONTAINER == "container"
+
+
+class TestSystemdScope:
+    def test_values(self) -> None:
+        assert SystemdScope.SYSTEM == "system"
+        assert SystemdScope.USER == "user"
+
+    def test_detect_scope_root(self) -> None:
+        with unittest.mock.patch("os.getuid", return_value=0):
+            assert detect_scope() == SystemdScope.SYSTEM
+
+    def test_detect_scope_non_root(self) -> None:
+        with unittest.mock.patch("os.getuid", return_value=1000):
+            assert detect_scope() == SystemdScope.USER

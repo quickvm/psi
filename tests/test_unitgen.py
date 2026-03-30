@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from psi.models import CertificateConfig, CertOutput, TlsConfig
+from psi.models import CertificateConfig, CertOutput, SystemdScope, TlsConfig
 from psi.unitgen import (
     collect_tls_volume_dirs,
     generate_container_driver_conf,
@@ -18,11 +18,20 @@ from psi.unitgen import (
 )
 
 
-def _mock_settings(tmp_path: Path, tls: TlsConfig | None = None) -> MagicMock:
+def _mock_settings(
+    tmp_path: Path,
+    tls: TlsConfig | None = None,
+    scope: SystemdScope = SystemdScope.SYSTEM,
+) -> MagicMock:
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
     settings.systemd_dir = tmp_path / "systemd"
     settings.tls = tls
+    settings.scope = scope
+    if scope == SystemdScope.USER:
+        settings.config_dir = Path.home() / ".config/psi"
+    else:
+        settings.config_dir = Path("/etc/psi")
     return settings
 
 
@@ -184,3 +193,37 @@ class TestCollectTlsVolumeDirs:
         dirs = collect_tls_volume_dirs(settings)
         assert Path("/ca") in dirs
         assert Path("/tls") in dirs
+
+
+class TestUserScopeGenerators:
+    def test_native_setup_service_user_scope(self) -> None:
+        content = generate_native_setup_service("/usr/bin/psi", SystemdScope.USER)
+        assert "WantedBy=default.target" in content
+        assert "multi-user.target" not in content
+
+    def test_native_setup_service_system_scope(self) -> None:
+        content = generate_native_setup_service("/usr/bin/psi", SystemdScope.SYSTEM)
+        assert "WantedBy=multi-user.target" in content
+
+    def test_container_quadlet_user_scope(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, scope=SystemdScope.USER)
+        content = generate_container_setup_quadlet("psi:latest", settings)
+        home = str(Path.home())
+        assert f"{home}/.config/psi" in content
+        assert "WantedBy=default.target" in content
+        assert "multi-user.target" not in content
+        assert "/run/dbus/system_bus_socket" not in content
+
+    def test_container_quadlet_system_scope(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, scope=SystemdScope.SYSTEM)
+        content = generate_container_setup_quadlet("psi:latest", settings)
+        assert "/etc/psi:/etc/psi:ro" in content
+        assert "WantedBy=multi-user.target" in content
+        assert "/run/dbus/system_bus_socket" in content
+
+    def test_container_driver_conf_user_scope(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, scope=SystemdScope.USER)
+        content = generate_container_driver_conf("psi:latest", settings)
+        home = str(Path.home())
+        assert f"{home}/.config/psi" in content
+        assert "/etc/psi" not in content

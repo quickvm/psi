@@ -12,29 +12,64 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from psi.models import AuthConfig, ProjectConfig, TlsConfig, TokenSettings, WorkloadConfig
+from psi.models import (
+    AuthConfig,
+    ProjectConfig,
+    SystemdScope,
+    TlsConfig,
+    TokenSettings,
+    WorkloadConfig,
+)
 
-PSI_DEFAULT_CONFIG = Path("/etc/psi/config.yaml")
+_SYSTEM_CONFIG = Path("/etc/psi/config.yaml")
+_SYSTEM_STATE_DIR = Path("/var/lib/psi")
+_SYSTEM_SYSTEMD_DIR = Path("/etc/containers/systemd")
+
+
+def default_config_path(scope: SystemdScope = SystemdScope.SYSTEM) -> Path:
+    """Return the default config file path for the given scope."""
+    if scope == SystemdScope.USER:
+        return Path.home() / ".config/psi/config.yaml"
+    return _SYSTEM_CONFIG
 
 
 class PsiSettings(BaseSettings):
     """Main configuration loaded from YAML, env vars, and CLI overrides."""
 
     model_config = SettingsConfigDict(
-        yaml_file=str(PSI_DEFAULT_CONFIG),
+        yaml_file=str(_SYSTEM_CONFIG),
         yaml_file_encoding="utf-8",
         env_prefix="PSI_",
     )
 
+    scope: SystemdScope = SystemdScope.SYSTEM
     api_url: str = "https://app.infisical.com"
     auth: AuthConfig | None = None
     verify_ssl: bool = True
-    state_dir: Path = Path("/var/lib/psi")
-    systemd_dir: Path = Path("/etc/containers/systemd")
+    state_dir: Path = _SYSTEM_STATE_DIR
+    systemd_dir: Path = _SYSTEM_SYSTEMD_DIR
     token: TokenSettings = TokenSettings()
     projects: dict[str, ProjectConfig]
     workloads: dict[str, WorkloadConfig] = {}
     tls: TlsConfig | None = None
+
+    @property
+    def config_dir(self) -> Path:
+        """Return the config directory for this scope."""
+        if self.scope == SystemdScope.USER:
+            return Path.home() / ".config/psi"
+        return Path("/etc/psi")
+
+    @model_validator(mode="after")
+    def apply_user_scope_defaults(self) -> PsiSettings:
+        """Override default paths for user scope when not explicitly set."""
+        if self.scope != SystemdScope.USER:
+            return self
+        if self.state_dir == _SYSTEM_STATE_DIR:
+            self.state_dir = Path.home() / ".local/share/psi"
+        if self.systemd_dir == _SYSTEM_SYSTEMD_DIR:
+            self.systemd_dir = Path.home() / ".config/containers/systemd"
+        return self
 
     @classmethod
     def settings_customise_sources(
@@ -100,16 +135,18 @@ def resolve_auth(project: ProjectConfig, settings: PsiSettings) -> AuthConfig:
     return auth
 
 
-def load_settings(config_path: Path | None = None) -> PsiSettings:
+def load_settings(
+    config_path: Path | None = None,
+    scope: SystemdScope = SystemdScope.SYSTEM,
+) -> PsiSettings:
     """Load settings from YAML config file with env var overrides."""
-    if config_path:
+    yaml_file = str(config_path or default_config_path(scope))
 
-        class _Settings(PsiSettings):
-            model_config = SettingsConfigDict(
-                yaml_file=str(config_path),
-                yaml_file_encoding="utf-8",
-                env_prefix="PSI_",
-            )
+    class _Settings(PsiSettings):
+        model_config = SettingsConfigDict(
+            yaml_file=yaml_file,
+            yaml_file_encoding="utf-8",
+            env_prefix="PSI_",
+        )
 
-        return _Settings()  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML
-    return PsiSettings()  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML
+    return _Settings(scope=scope)  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML

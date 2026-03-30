@@ -7,11 +7,26 @@ Infisical when a container starts.
 
 Built for [Fedora CoreOS](https://fedoraproject.org/coreos/) but works anywhere Podman runs.
 
+## System vs user scope
+
+psi auto-detects whether to use system or user scope based on UID. Running as root uses system
+paths; running as a regular user uses XDG user paths.
+
+| Path | System (root) | User (non-root) |
+|------|---------------|-----------------|
+| Config | `/etc/psi/config.yaml` | `~/.config/psi/config.yaml` |
+| State | `/var/lib/psi` | `~/.local/share/psi` |
+| Quadlets | `/etc/containers/systemd` | `~/.config/containers/systemd` |
+| Units | `/etc/systemd/system` | `~/.config/systemd/user` |
+| Driver conf | `/etc/containers/containers.conf.d` | `~/.config/containers/containers.conf.d` |
+
+System scope manages rootful Podman. User scope manages rootless Podman.
+
 ## How it works
 
 ```
 Boot time: psi setup
-  1. Reads /etc/psi/config.yaml
+  1. Reads config (system: /etc/psi/config.yaml, user: ~/.config/psi/config.yaml)
   2. Authenticates with Infisical (AWS IAM, Universal Auth, GCP, or Azure)
   3. Discovers secrets per workload from configured projects + folder paths
   4. Registers coordinate mappings with Podman (podman secret create)
@@ -39,7 +54,7 @@ podman pull ghcr.io/quickvm/psi:latest
 
 Requires Python 3.14+. Type checked with [ty](https://github.com/astral-sh/ty).
 
-### Running in a container
+### Running in a container (rootful)
 
 When running psi in a container, mount the config file and state directory:
 
@@ -49,6 +64,24 @@ podman run --rm \
     -v /var/lib/psi:/var/lib/psi:Z \
     ghcr.io/quickvm/psi:latest login
 ```
+
+### Running in a container (rootless)
+
+For rootless Podman, mount the user-scope paths. The D-Bus user session socket is required for
+`psi setup` to run `systemctl --user daemon-reload` inside the container:
+
+```bash
+podman run --rm \
+    -v ~/.config/psi:$HOME/.config/psi:ro \
+    -v ~/.local/share/psi:$HOME/.local/share/psi:Z \
+    -v $XDG_RUNTIME_DIR/bus:$XDG_RUNTIME_DIR/bus \
+    ghcr.io/quickvm/psi:latest login
+```
+
+`$XDG_RUNTIME_DIR` is typically `/run/user/$(id -u)`. The bus socket allows the container to
+communicate with the user's systemd instance for daemon-reload operations.
+
+### Custom CA certificates
 
 If your Infisical instance uses a private CA or self-signed certificate, mount the host CA bundle
 and set `SSL_CERT_FILE`:
@@ -67,7 +100,7 @@ recommended for production.
 
 ## Configuration
 
-Create `/etc/psi/config.yaml`:
+Create `/etc/psi/config.yaml` (system) or `~/.config/psi/config.yaml` (user):
 
 ```yaml
 api_url: https://app.infisical.com
@@ -172,22 +205,44 @@ psi install                 Generate containers.conf.d/psi.conf + state director
 psi systemd install         Generate systemd units (native or container mode)
 ```
 
-All commands accept `--config/-c` or the `PSI_CONFIG` env var (default: `/etc/psi/config.yaml`).
+All commands accept `--config/-c` or the `PSI_CONFIG` env var. The default config path is
+auto-detected from scope: `/etc/psi/config.yaml` (root) or `~/.config/psi/config.yaml` (user).
 
-### Quick start
+### Quick start (system / rootful)
 
 ```bash
 # 1. Install the Podman shell driver config
 sudo psi install
 
 # 2. Test authentication
-psi login
+sudo psi login
 
 # 3. Discover and register secrets
 sudo psi setup
 
 # 4. Start your containers — secrets are fetched automatically
 sudo systemctl start homeassistant
+```
+
+### Quick start (user / rootless)
+
+```bash
+# 1. Create config at ~/.config/psi/config.yaml
+
+# 2. Install the Podman shell driver config
+psi install
+
+# 3. Test authentication
+psi login
+
+# 4. Discover and register secrets
+psi setup
+
+# 5. Start your containers — secrets are fetched automatically
+systemctl --user start homeassistant
+
+# For headless/SSH users: enable lingering so user units run without a login session
+loginctl enable-linger $USER
 ```
 
 ### Writing secrets to files
@@ -348,22 +403,19 @@ use the Infisical renewal API directly. If state is lost, re-run `psi tls issue`
 ## FCOS deployment
 
 On Fedora CoreOS, install via Butane/Ignition and run `psi setup` as a oneshot systemd service
-before your container workloads start:
+before your container workloads start. Use `psi systemd install` to generate these units
+automatically:
 
-```ini
-[Unit]
-Description=Setup Infisical secrets for Podman
-After=network-online.target
-Wants=network-online.target
+```bash
+# System scope (rootful)
+sudo psi systemd install --mode native --enable
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/bin/psi setup
-
-[Install]
-WantedBy=multi-user.target
+# User scope (rootless)
+psi systemd install --mode native --enable
 ```
+
+The generated setup service uses `WantedBy=multi-user.target` (system) or
+`WantedBy=default.target` (user) as appropriate.
 
 For TLS certificate renewal, add a systemd timer:
 

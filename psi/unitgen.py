@@ -5,7 +5,10 @@ No file I/O — functions return strings only, making them testable.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
+
+from psi.models import SystemdScope
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -13,8 +16,12 @@ if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
 
-def generate_native_setup_service(psi_path: str) -> str:
+def generate_native_setup_service(
+    psi_path: str,
+    scope: SystemdScope = SystemdScope.SYSTEM,
+) -> str:
     """Generate psi-secrets-setup.service for native mode."""
+    wanted_by = "default.target" if scope == SystemdScope.USER else "multi-user.target"
     return (
         "[Unit]\n"
         "Description=PSI secrets setup\n"
@@ -27,7 +34,7 @@ def generate_native_setup_service(psi_path: str) -> str:
         f"ExecStart={psi_path} setup\n"
         "\n"
         "[Install]\n"
-        "WantedBy=multi-user.target\n"
+        f"WantedBy={wanted_by}\n"
     )
 
 
@@ -65,6 +72,11 @@ def generate_container_setup_quadlet(image: str, settings: PsiSettings) -> str:
     """Generate psi-secrets-setup.container quadlet."""
     state = settings.state_dir
     systemd = settings.systemd_dir
+    config_dir = settings.config_dir
+    containers_conf = _containers_conf_dir(settings.scope)
+    dbus_socket = _dbus_socket_path(settings.scope)
+    wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
+
     lines = [
         "[Unit]",
         "Description=PSI secrets setup",
@@ -75,18 +87,18 @@ def generate_container_setup_quadlet(image: str, settings: PsiSettings) -> str:
         f"Image={image}",
         "Exec=setup",
         "Network=host",
-        "Volume=/etc/psi:/etc/psi:ro",
+        f"Volume={config_dir}:{config_dir}:ro",
         f"Volume={state}:{state}:Z",
         f"Volume={systemd}:{systemd}:Z",
-        "Volume=/etc/containers/containers.conf.d:/etc/containers/containers.conf.d:Z",
-        "Volume=/run/dbus/system_bus_socket:/run/dbus/system_bus_socket",
+        f"Volume={containers_conf}:{containers_conf}:Z",
+        f"Volume={dbus_socket}:{dbus_socket}",
         "",
         "[Service]",
         "Type=oneshot",
         "RemainAfterExit=yes",
         "",
         "[Install]",
-        "WantedBy=multi-user.target",
+        f"WantedBy={wanted_by}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -94,6 +106,7 @@ def generate_container_setup_quadlet(image: str, settings: PsiSettings) -> str:
 def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> str:
     """Generate psi-tls-renew.container quadlet."""
     state = settings.state_dir
+    config_dir = settings.config_dir
     tls_dirs = collect_tls_volume_dirs(settings)
 
     lines = [
@@ -106,7 +119,7 @@ def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> s
         f"Image={image}",
         "Exec=tls renew",
         "Network=host",
-        "Volume=/etc/psi:/etc/psi:ro",
+        f"Volume={config_dir}:{config_dir}:ro",
         f"Volume={state}:{state}:Z",
     ]
     for d in sorted(tls_dirs):
@@ -139,7 +152,8 @@ def generate_native_driver_conf() -> str:
 def generate_container_driver_conf(image: str, settings: PsiSettings) -> str:
     """Generate containers.conf.d/psi.conf for container mode."""
     state = settings.state_dir
-    base = f"podman run --rm -v {state}:{state}:Z -v /etc/psi:/etc/psi:ro"
+    config_dir = settings.config_dir
+    base = f"podman run --rm -v {state}:{state}:Z -v {config_dir}:{config_dir}:ro"
     return (
         "[secrets]\n"
         'driver = "shell"\n'
@@ -150,6 +164,23 @@ def generate_container_driver_conf(image: str, settings: PsiSettings) -> str:
         f'delete = "{base} {image} secret delete"\n'
         f'list = "{base} {image} secret list"\n'
     )
+
+
+def _containers_conf_dir(scope: SystemdScope) -> Path:
+    """Return the containers.conf.d directory for the given scope."""
+    from pathlib import Path
+
+    if scope == SystemdScope.USER:
+        return Path.home() / ".config/containers/containers.conf.d"
+    return Path("/etc/containers/containers.conf.d")
+
+
+def _dbus_socket_path(scope: SystemdScope) -> str:
+    """Return the D-Bus socket path for the given scope."""
+    if scope == SystemdScope.USER:
+        xdg = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        return f"{xdg}/bus"
+    return "/run/dbus/system_bus_socket"
 
 
 def collect_tls_volume_dirs(settings: PsiSettings) -> set[Path]:
