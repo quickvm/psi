@@ -99,18 +99,26 @@ def read_quadlet(
         resolve_secrets: If True, resolve Secret= refs via podman inspect.
     """
     secrets: list[ImportSecret] = []
+    seen: set[tuple[str, str]] = set()
     for path in paths:
         source = str(path)
         for line in path.read_text().splitlines():
             stripped = line.strip()
             if stripped.startswith("Environment="):
                 env_part = stripped[len("Environment=") :]
-                secrets.extend(_parse_env_directive(env_part, source))
+                for s in _parse_env_directive(env_part, source):
+                    dedup_key = (s.key, s.value)
+                    if dedup_key not in seen:
+                        seen.add(dedup_key)
+                        secrets.append(s)
             elif stripped.startswith("Secret="):
                 secret_ref = stripped[len("Secret=") :]
                 result = _parse_secret_directive(secret_ref, source, resolve_secrets)
                 if result:
-                    secrets.append(result)
+                    dedup_key = (result.key, result.value)
+                    if dedup_key not in seen:
+                        seen.add(dedup_key)
+                        secrets.append(result)
     return secrets
 
 

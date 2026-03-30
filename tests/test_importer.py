@@ -152,6 +152,27 @@ class TestReadQuadlet:
         keys = {s.key for s in secrets}
         assert keys == {"A", "B"}
 
+    def test_deduplicates_across_files(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "app.container"
+        f1.write_text("[Container]\nEnvironment=DB_HOST=localhost\n")
+        f2 = tmp_path / "worker.container"
+        f2.write_text("[Container]\nEnvironment=DB_HOST=localhost\n")
+        secrets = read_quadlet([f1, f2])
+        assert len(secrets) == 1
+        assert secrets[0].key == "DB_HOST"
+
+    def test_deduplicates_resolved_secrets(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "app.container"
+        f1.write_text("[Container]\nSecret=DB_PASS,type=env,target=PASSWORD\n")
+        f2 = tmp_path / "worker.container"
+        f2.write_text("[Container]\nSecret=DB_PASS,type=env,target=PASSWORD\n")
+        inspect_result = MagicMock()
+        inspect_result.stdout = json.dumps([{"SecretData": "s3cret"}])
+        with patch("psi.importer.subprocess.run", return_value=inspect_result):
+            secrets = read_quadlet([f1, f2], resolve_secrets=True)
+        assert len(secrets) == 1
+        assert secrets[0].key == "PASSWORD"
+
 
 def _mock_client() -> Any:
     """Create a mock InfisicalClient."""
