@@ -42,12 +42,28 @@ def run_setup(settings: PsiSettings) -> None:
             _generate_drop_in(settings, workload_name, merged)
 
     console.print("\n[bold]Reloading systemd...[/bold]")
-    cmd = ["systemctl"]
-    if settings.scope == SystemdScope.USER:
-        cmd.append("--user")
-    cmd.append("daemon-reload")
-    subprocess.run(cmd, check=True)
+    _systemd_daemon_reload(settings.scope)
     console.print("[green]Setup complete.[/green]")
+
+
+def _systemd_daemon_reload(scope: SystemdScope) -> None:
+    """Reload systemd via D-Bus, falling back to systemctl."""
+    try:
+        import dbus
+
+        bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
+        systemd = bus.get_object(
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+        )
+        manager = dbus.Interface(systemd, "org.freedesktop.systemd1.Manager")
+        manager.Reload()
+    except ImportError:
+        cmd = ["systemctl"]
+        if scope == SystemdScope.USER:
+            cmd.append("--user")
+        cmd.append("daemon-reload")
+        subprocess.run(cmd, check=True)
 
 
 def _discover_workload_secrets(
