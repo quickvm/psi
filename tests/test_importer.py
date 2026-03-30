@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +15,17 @@ from psi.models import ConflictPolicy, ImportOutcome
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _mock_podman_api_get(responses: dict[str, Any]) -> Any:
+    """Create a mock for _podman_api_get that returns different responses per path."""
+
+    def _get(path: str, params: dict[str, str] | None = None) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = responses.get(path, [])
+        return mock_resp
+
+    return _get
 
 
 class TestReadEnvFile:
@@ -74,31 +84,30 @@ class TestReadEnvFile:
 
 class TestReadPodmanSecrets:
     def test_reads_specific_secrets(self) -> None:
-        inspect_output = json.dumps([{"SecretData": "my-password"}])
-        mock_result = MagicMock()
-        mock_result.stdout = inspect_output
-
-        with patch("psi.importer.subprocess.run", return_value=mock_result) as mock_run:
+        mock_get = _mock_podman_api_get(
+            {
+                "/libpod/secrets/DB_PASS/json": {"SecretData": "my-password"},
+            }
+        )
+        with patch("psi.importer._podman_api_get", side_effect=mock_get):
             secrets = read_podman_secrets(["DB_PASS"])
 
         assert len(secrets) == 1
         assert secrets[0].key == "DB_PASS"
         assert secrets[0].value == "my-password"
-        assert mock_run.call_count == 1
 
     def test_reads_all_secrets(self) -> None:
-        ls_result = MagicMock()
-        ls_result.stdout = "SECRET_A\nSECRET_B\n"
-
-        inspect_a = MagicMock()
-        inspect_a.stdout = json.dumps([{"SecretData": "val-a"}])
-        inspect_b = MagicMock()
-        inspect_b.stdout = json.dumps([{"SecretData": "val-b"}])
-
-        with patch(
-            "psi.importer.subprocess.run",
-            side_effect=[ls_result, inspect_a, inspect_b],
-        ):
+        mock_get = _mock_podman_api_get(
+            {
+                "/libpod/secrets/json": [
+                    {"Spec": {"Name": "SECRET_A"}},
+                    {"Spec": {"Name": "SECRET_B"}},
+                ],
+                "/libpod/secrets/SECRET_A/json": {"SecretData": "val-a"},
+                "/libpod/secrets/SECRET_B/json": {"SecretData": "val-b"},
+            }
+        )
+        with patch("psi.importer._podman_api_get", side_effect=mock_get):
             secrets = read_podman_secrets(None)
 
         assert len(secrets) == 2
@@ -132,10 +141,12 @@ class TestReadQuadlet:
     def test_resolves_secret_refs(self, tmp_path: Path) -> None:
         container = tmp_path / "app.container"
         container.write_text("[Container]\nSecret=DB_PASS,type=env,target=DATABASE_PASSWORD\n")
-        inspect_result = MagicMock()
-        inspect_result.stdout = json.dumps([{"SecretData": "s3cret"}])
-
-        with patch("psi.importer.subprocess.run", return_value=inspect_result):
+        mock_get = _mock_podman_api_get(
+            {
+                "/libpod/secrets/DB_PASS/json": {"SecretData": "s3cret"},
+            }
+        )
+        with patch("psi.importer._podman_api_get", side_effect=mock_get):
             secrets = read_quadlet([container], resolve_secrets=True)
 
         assert len(secrets) == 1
@@ -166,9 +177,12 @@ class TestReadQuadlet:
         f1.write_text("[Container]\nSecret=DB_PASS,type=env,target=PASSWORD\n")
         f2 = tmp_path / "worker.container"
         f2.write_text("[Container]\nSecret=DB_PASS,type=env,target=PASSWORD\n")
-        inspect_result = MagicMock()
-        inspect_result.stdout = json.dumps([{"SecretData": "s3cret"}])
-        with patch("psi.importer.subprocess.run", return_value=inspect_result):
+        mock_get = _mock_podman_api_get(
+            {
+                "/libpod/secrets/DB_PASS/json": {"SecretData": "s3cret"},
+            }
+        )
+        with patch("psi.importer._podman_api_get", side_effect=mock_get):
             secrets = read_quadlet([f1, f2], resolve_secrets=True)
         assert len(secrets) == 1
         assert secrets[0].key == "PASSWORD"

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
+import os
 import sys
 from typing import TYPE_CHECKING
 
+import httpx
 from rich.console import Console
 
 from psi.models import (
@@ -26,6 +26,27 @@ console = Console()
 err_console = Console(stderr=True)
 
 _BATCH_CHUNK_SIZE = 100
+_PODMAN_API_VERSION = "v5.0.0"
+
+
+def _podman_socket_url() -> str:
+    """Return the Podman API Unix socket path as an httpx transport URL."""
+    uid = os.getuid()
+    if uid == 0:
+        return "/run/podman/podman.sock"
+    return f"/run/user/{uid}/podman/podman.sock"
+
+
+def _podman_api_get(path: str, params: dict[str, str] | None = None) -> httpx.Response:
+    """Make a GET request to the Podman REST API via Unix socket."""
+    transport = httpx.HTTPTransport(uds=_podman_socket_url())
+    with httpx.Client(transport=transport, timeout=10.0) as client:
+        resp = client.get(
+            f"http://localhost/{_PODMAN_API_VERSION}{path}",
+            params=params,
+        )
+        resp.raise_for_status()
+        return resp
 
 
 def read_env_file(path: Path | None) -> list[ImportSecret]:
@@ -59,30 +80,22 @@ def read_env_file(path: Path | None) -> list[ImportSecret]:
 
 
 def read_podman_secrets(names: list[str] | None) -> list[ImportSecret]:
-    """Read secret values from Podman's secret store.
+    """Read secret values from Podman's secret store via the REST API.
 
     Args:
         names: Specific secret names, or None to read all.
     """
     if names is None:
-        result = subprocess.run(
-            ["podman", "secret", "ls", "--format", "{{.Name}}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        names = [n for n in result.stdout.strip().splitlines() if n]
+        resp = _podman_api_get("/libpod/secrets/json")
+        names = [s["Spec"]["Name"] for s in resp.json()]
 
     secrets: list[ImportSecret] = []
     for name in names:
-        result = subprocess.run(
-            ["podman", "secret", "inspect", "--showsecret", name],
-            capture_output=True,
-            text=True,
-            check=True,
+        resp = _podman_api_get(
+            f"/libpod/secrets/{name}/json",
+            params={"showsecret": "true"},
         )
-        data = json.loads(result.stdout)
-        value = data[0]["SecretData"]
+        value = resp.json()["SecretData"]
         secrets.append(ImportSecret(key=name, value=value, source="podman-secret"))
     return secrets
 
@@ -236,14 +249,11 @@ def _parse_secret_directive(
         )
         return None
 
-    result = subprocess.run(
-        ["podman", "secret", "inspect", "--showsecret", secret_name],
-        capture_output=True,
-        text=True,
-        check=True,
+    resp = _podman_api_get(
+        f"/libpod/secrets/{secret_name}/json",
+        params={"showsecret": "true"},
     )
-    data = json.loads(result.stdout)
-    value = data[0]["SecretData"]
+    value = resp.json()["SecretData"]
     return ImportSecret(key=target, value=value, source=source)
 
 
