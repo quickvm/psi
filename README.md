@@ -179,6 +179,45 @@ workloads:
     provider: nitrokeyhsm
 ```
 
+### Recursive secret listing
+
+By default, each secret source only fetches secrets from its exact path. Set `recursive: true` to
+include secrets from subfolders.
+
+This matters when you use Infisical subfolders to scope secrets to different containers in the same
+pod. Without the default `recursive: false`, listing `/windmill` would also return secrets from
+`/windmill/server` and `/windmill/worker`, mixing secrets across containers.
+
+```yaml
+workloads:
+  windmill-server:
+    provider: infisical
+    secrets:
+      - project: homelab
+        path: /windmill          # shared secrets (DB_HOST, REDIS_URL, etc.)
+      - project: homelab
+        path: /windmill/server   # server-specific (MODE=server)
+
+  windmill-worker-1:
+    provider: infisical
+    secrets:
+      - project: homelab
+        path: /windmill          # same shared secrets
+      - project: homelab
+        path: /windmill/worker   # worker-specific (MODE=worker, NUM_WORKERS)
+```
+
+To pull an entire folder tree into a single workload:
+
+```yaml
+  myapp:
+    provider: infisical
+    secrets:
+      - project: myproject
+        path: /myapp
+        recursive: true          # includes /myapp, /myapp/db, /myapp/cache, etc.
+```
+
 ### Workload dependencies
 
 `depends_on` adds systemd ordering to generated drop-ins. Each entry becomes `After=` and `Wants=`

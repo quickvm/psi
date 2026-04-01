@@ -168,6 +168,7 @@ workloads:
     secrets:
       - project: myproject
         path: /myapp
+        # recursive: true       # set to include secrets from subfolders (default: false)
   infisical:
     provider: nitrokeyhsm
 ```
