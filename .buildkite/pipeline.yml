@@ -1,36 +1,46 @@
 steps:
+  - label: ":docker: Build Test Container"
+    key: build-test
+    command: |
+      set -euo pipefail
+      podman build -t psi:test --target test -f Containerfile .
+
+  - wait: ~
+
   - group: ":pytest: Tests"
     key: tests
     steps:
       - label: ":ruff: Lint & Format"
-        command:
-          - uv sync
-          - uv run ruff check psi/ tests/
-          - uv run ruff format --check psi/ tests/
+        command: |
+          podman run --rm -v "$$PWD:/src:z" -w /src \
+            -e RUFF_CACHE_DIR=/tmp/ruff-cache \
+            --entrypoint bash psi:test -c \
+            "ruff check psi/ tests/ && ruff format --check psi/ tests/"
 
       - label: ":ty: Type Check"
-        command:
-          - uv sync
-          - uv run ty check
+        command: |
+          podman run --rm -v "$$PWD:/src:z" -w /src \
+            -e XDG_CACHE_HOME=/tmp/cache \
+            --entrypoint bash psi:test -c \
+            "ty check"
 
       - label: ":pytest: Unit Tests"
-        command:
-          - uv sync
-          - uv run pytest -q
+        command: |
+          podman run --rm -v "$$PWD:/src:z" -w /src \
+            --entrypoint bash psi:test -c \
+            "pytest -q"
 
   - wait: ~
 
-  - group: ":docker: Build"
-    key: build
-    steps:
-      - label: ":docker: Build Container"
-        command: |
-          set -euo pipefail
-          SHORT_SHA=$$(echo "$$BUILDKITE_COMMIT" | cut -c1-7)
-          IMAGE="ghcr.io/quickvm/psi"
-          podman build -t "$$IMAGE:sha-$$SHORT_SHA" -f Containerfile .
-          podman push "$$IMAGE:sha-$$SHORT_SHA"
-          if [ "$$BUILDKITE_BRANCH" = "master" ]; then
-            podman tag "$$IMAGE:sha-$$SHORT_SHA" "$$IMAGE:latest"
-            podman push "$$IMAGE:latest"
-          fi
+  - label: ":docker: Build & Push"
+    key: push
+    command: |
+      set -euo pipefail
+      SHORT_SHA=$$(echo "$$BUILDKITE_COMMIT" | cut -c1-7)
+      IMAGE="ghcr.io/quickvm/psi"
+      podman build -t "$$IMAGE:sha-$$SHORT_SHA" -f Containerfile .
+      podman push "$$IMAGE:sha-$$SHORT_SHA"
+      if [ "$$BUILDKITE_BRANCH" = "master" ]; then
+        podman tag "$$IMAGE:sha-$$SHORT_SHA" "$$IMAGE:latest"
+        podman push "$$IMAGE:latest"
+      fi
