@@ -64,8 +64,13 @@ class InfisicalClient:
         project_id: str,
         environment: str,
         secret_path: str,
+        *,
+        recursive: bool = False,
     ) -> list[dict[str, Any]]:
-        """List all secrets at a path, recursively.
+        """List secrets at a path.
+
+        Args:
+            recursive: If True, include secrets from subfolders.
 
         Returns:
             List of secret objects with secretKey, secretValue, secretPath, etc.
@@ -76,7 +81,7 @@ class InfisicalClient:
                 "projectId": project_id,
                 "environment": environment,
                 "secretPath": secret_path,
-                "recursive": "true",
+                "recursive": str(recursive).lower(),
                 "viewSecretValue": "true",
                 "expandSecretReferences": "true",
                 "includeImports": "true",

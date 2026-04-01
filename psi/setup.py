@@ -78,6 +78,7 @@ def _setup_infisical_workload(
                 project.id,
                 project.environment,
                 source.path,
+                recursive=source.recursive,
             )
 
             for secret in secrets:
