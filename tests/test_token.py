@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from psi.models import AuthConfig, AuthMethod
-from psi.token import read_cached_token, write_token_cache
+from psi.providers.infisical.models import AuthConfig, AuthMethod
+from psi.providers.infisical.token import read_cached_token, write_token_cache
 
 if TYPE_CHECKING:
     from pathlib import Path

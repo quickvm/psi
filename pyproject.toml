@@ -1,22 +1,22 @@
 [project]
-name = "podman-secret-infisical"
+name = "podman-secret-infrastructure"
 version = "0.1.0"
-description = "Fetch Infisical secrets into Podman containers via the shell secret driver"
+description = "Universal Podman secret driver with pluggable provider backends"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
     "boto3>=1.38.0",
+    "cryptography>=44.0.0",
+    "dbus-python>=1.3.2",
     "httpx>=0.28.0",
     "pydantic>=2.12.0",
     "pydantic-settings>=2.13.0",
+    "PyKCS11>=1.5.12",
     "pyyaml>=6.0",
     "rich>=14.0.0",
     "typer>=0.15.0",
 ]
-
-[project.optional-dependencies]
-dbus = ["dbus-python>=1.3.2"]
 
 [project.scripts]
 psi = "psi.cli:main"

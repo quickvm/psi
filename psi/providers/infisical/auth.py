@@ -10,7 +10,7 @@ import base64
 import json
 from typing import TYPE_CHECKING
 
-from psi.models import AuthConfig, AuthMethod
+from psi.providers.infisical.models import AuthConfig, AuthMethod
 
 if TYPE_CHECKING:
     import httpx
@@ -77,7 +77,9 @@ def _aws_iam_login(
     auth: AuthConfig,
 ) -> tuple[str, int]:
     """Sign an STS GetCallerIdentity request and send to Infisical."""
-    from botocore.auth import SigV4Auth
+    from botocore.auth import (
+        SigV4Auth,
+    )
     from botocore.awsrequest import AWSRequest
     from botocore.session import Session
 

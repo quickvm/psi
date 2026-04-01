@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from psi.models import CertificateConfig, CertOutput, SystemdScope, TlsConfig
+from psi.models import SystemdScope
+from psi.providers.infisical.models import CertificateConfig, CertOutput, TlsConfig
 from psi.unitgen import (
     collect_tls_volume_dirs,
     generate_container_setup_quadlet,
@@ -25,8 +26,14 @@ def _mock_settings(
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
     settings.systemd_dir = tmp_path / "systemd"
-    settings.tls = tls
+    settings.ca_cert = None
     settings.scope = scope
+    if tls:
+        settings.providers = {
+            "infisical": {"tls": tls.model_dump()},
+        }
+    else:
+        settings.providers = {}
     if scope == SystemdScope.USER:
         settings.config_dir = Path.home() / ".config/psi"
     else:

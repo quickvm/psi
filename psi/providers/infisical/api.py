@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from psi.auth import authenticate
-from psi.token import read_cached_token, write_token_cache
+from psi.providers.infisical.auth import authenticate
+from psi.providers.infisical.token import read_cached_token, write_token_cache
 
 if TYPE_CHECKING:
-    from psi.models import AuthConfig
+    from psi.providers.infisical.models import AuthConfig
 
 _TIMEOUT = 30.0
 

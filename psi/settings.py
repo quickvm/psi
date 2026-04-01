@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import model_validator
 from pydantic_settings import (
@@ -12,14 +13,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from psi.models import (
-    AuthConfig,
-    ProjectConfig,
-    SystemdScope,
-    TlsConfig,
-    TokenSettings,
-    WorkloadConfig,
-)
+from psi.models import SystemdScope, WorkloadConfig
 
 _SYSTEM_CONFIG = Path("/etc/psi/config.yaml")
 _SYSTEM_STATE_DIR = Path("/var/lib/psi")
@@ -43,16 +37,11 @@ class PsiSettings(BaseSettings):
     )
 
     scope: SystemdScope = SystemdScope.SYSTEM
-    api_url: str = "https://app.infisical.com"
-    auth: AuthConfig | None = None
-    verify_ssl: bool = True
-    ca_cert: Path | None = None
     state_dir: Path = _SYSTEM_STATE_DIR
     systemd_dir: Path = _SYSTEM_SYSTEMD_DIR
-    token: TokenSettings = TokenSettings()
-    projects: dict[str, ProjectConfig]
+    ca_cert: Path | None = None
+    providers: dict[str, Any] = {}
     workloads: dict[str, WorkloadConfig] = {}
-    tls: TlsConfig | None = None
 
     @property
     def config_dir(self) -> Path:
@@ -88,52 +77,18 @@ class PsiSettings(BaseSettings):
         )
 
     @model_validator(mode="after")
-    def validate_auth_coverage(self) -> PsiSettings:
-        """Ensure every project has auth (own or global fallback)."""
-        if self.auth:
-            return self
-        missing = [name for name, proj in self.projects.items() if not proj.auth]
-        if missing:
-            msg = (
-                f"No global auth and no per-project auth for: "
-                f"{', '.join(missing)}. Either set top-level 'auth' "
-                f"or add 'auth' to each project."
-            )
-            raise ValueError(msg)
-        return self
-
-    @model_validator(mode="after")
-    def validate_project_references(self) -> PsiSettings:
-        """Ensure workloads and TLS certs reference existing projects."""
-        available = ", ".join(self.projects)
+    def validate_workload_providers(self) -> PsiSettings:
+        """Ensure workloads reference configured providers."""
         for workload_name, workload in self.workloads.items():
-            for source in workload.secrets:
-                if source.project not in self.projects:
-                    msg = (
-                        f"Workload '{workload_name}' references unknown "
-                        f"project '{source.project}'. "
-                        f"Available: {available}"
-                    )
-                    raise ValueError(msg)
-        if self.tls:
-            for cert_name, cert in self.tls.certificates.items():
-                if cert.project not in self.projects:
-                    msg = (
-                        f"Certificate '{cert_name}' references unknown "
-                        f"project '{cert.project}'. "
-                        f"Available: {available}"
-                    )
-                    raise ValueError(msg)
+            if workload.provider not in self.providers:
+                available = ", ".join(self.providers) or "(none)"
+                msg = (
+                    f"Workload '{workload_name}' uses provider "
+                    f"'{workload.provider}', but it is not configured. "
+                    f"Available: {available}"
+                )
+                raise ValueError(msg)
         return self
-
-
-def resolve_auth(project: ProjectConfig, settings: PsiSettings) -> AuthConfig:
-    """Resolve auth for a project: project-level auth wins, then global."""
-    auth = project.auth or settings.auth
-    if not auth:
-        msg = f"No auth configured for project '{project.id}'"
-        raise ValueError(msg)
-    return auth
 
 
 def load_settings(
@@ -150,4 +105,4 @@ def load_settings(
             env_prefix="PSI_",
         )
 
-    return _Settings(scope=scope)  # ty: ignore[missing-argument]  # pydantic-settings loads from YAML
+    return _Settings(scope=scope)

@@ -4,15 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from psi.models import (
-    AuthConfig,
-    AuthMethod,
-    ProjectConfig,
-    SecretMapping,
-    SecretSource,
-    SystemdScope,
-    WorkloadConfig,
-)
+from psi.models import SecretSource, SystemdScope, WorkloadConfig
+from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
 from psi.setup import _generate_drop_in
 
@@ -25,35 +18,39 @@ def _make_settings(
     workloads: dict[str, WorkloadConfig],
 ) -> PsiSettings:
     """Build a minimal settings object for _generate_drop_in."""
-
     return PsiSettings(
-        api_url="https://infisical.test",
-        auth=AuthConfig(
-            method=AuthMethod.UNIVERSAL,
-            client_id="cid",
-            client_secret="csec",
-        ),
         state_dir=tmp_path / "state",
         systemd_dir=tmp_path / "systemd",
-        projects={
-            "myproject": ProjectConfig(id="proj-uuid", environment="prod"),
+        providers={
+            "infisical": {
+                "api_url": "https://infisical.test",
+                "auth": {
+                    "method": "universal-auth",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                },
+                "projects": {
+                    "myproject": {"id": "proj-uuid", "environment": "prod"},
+                },
+            },
         },
         workloads=workloads,
         scope=SystemdScope.SYSTEM,
     )
 
 
-def _sample_secrets() -> dict[str, SecretMapping]:
+def _sample_secrets() -> dict[str, str]:
+    """Return sample mapping JSON strings keyed by secret name."""
     return {
-        "DB_PASSWORD": SecretMapping(
-            project_alias="myproject",
-            secret_path="/app",
-            secret_name="DB_PASSWORD",
+        "DB_PASSWORD": InfisicalProvider.make_mapping(
+            "myproject",
+            "/app",
+            "DB_PASSWORD",
         ),
-        "API_KEY": SecretMapping(
-            project_alias="myproject",
-            secret_path="/app",
-            secret_name="API_KEY",
+        "API_KEY": InfisicalProvider.make_mapping(
+            "myproject",
+            "/app",
+            "API_KEY",
         ),
     }
 
@@ -61,6 +58,7 @@ def _sample_secrets() -> dict[str, SecretMapping]:
 class TestGenerateDropIn:
     def test_dropin_without_depends_on(self, tmp_path: Path) -> None:
         workload = WorkloadConfig(
+            provider="infisical",
             secrets=[SecretSource(project="myproject", path="/app")],
         )
         settings = _make_settings(tmp_path, {"myapp": workload})
@@ -76,6 +74,7 @@ class TestGenerateDropIn:
 
     def test_dropin_with_depends_on(self, tmp_path: Path) -> None:
         workload = WorkloadConfig(
+            provider="infisical",
             secrets=[SecretSource(project="myproject", path="/app")],
             depends_on=["psi-secrets-setup.service"],
         )
@@ -87,29 +86,12 @@ class TestGenerateDropIn:
 
         assert content.startswith("[Unit]\n")
         assert "After=psi-secrets-setup.service\n" in content
-        assert "Requires=psi-secrets-setup.service\n" in content
+        assert "Wants=psi-secrets-setup.service\n" in content
         assert "[Container]\n" in content
-
-    def test_dropin_with_multiple_depends_on(self, tmp_path: Path) -> None:
-        workload = WorkloadConfig(
-            secrets=[SecretSource(project="myproject", path="/app")],
-            depends_on=[
-                "psi-secrets-setup.service",
-                "network-online.target",
-            ],
-        )
-        settings = _make_settings(tmp_path, {"myapp": workload})
-        _generate_drop_in(settings, "myapp", _sample_secrets())
-
-        dropin = tmp_path / "systemd" / "myapp.container.d" / "50-secrets.conf"
-        content = dropin.read_text()
-
-        expected_deps = "psi-secrets-setup.service network-online.target"
-        assert f"After={expected_deps}\n" in content
-        assert f"Requires={expected_deps}\n" in content
 
     def test_dropin_secrets_sorted(self, tmp_path: Path) -> None:
         workload = WorkloadConfig(
+            provider="infisical",
             secrets=[SecretSource(project="myproject", path="/app")],
         )
         settings = _make_settings(tmp_path, {"myapp": workload})

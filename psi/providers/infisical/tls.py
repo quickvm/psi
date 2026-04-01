@@ -11,14 +11,18 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 from rich.table import Table
 
-from psi.api import InfisicalClient
-from psi.models import CertState, CertStatusInfo
-from psi.settings import resolve_auth
+from psi.providers.infisical.api import InfisicalClient
+from psi.providers.infisical.models import (
+    CertState,
+    CertStatusInfo,
+    InfisicalConfig,
+    resolve_auth,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from psi.models import CertificateConfig
+    from psi.providers.infisical.models import CertificateConfig
     from psi.settings import PsiSettings
 
 console = Console()
@@ -37,10 +41,19 @@ def issue_all(settings: PsiSettings) -> None:
     """Issue all configured TLS certificates."""
     tls = _require_tls(settings)
 
-    with InfisicalClient.from_settings(settings) as client:
+    inf_config = _get_infisical_config(settings)
+    client = InfisicalClient(
+        inf_config.api_url,
+        settings.state_dir,
+        inf_config.token.ttl,
+        inf_config.verify_ssl,
+    )
+    try:
         for cert_name, cert_config in tls.certificates.items():
             console.print(f"\n[bold]Certificate: {cert_name}[/bold]")
-            _issue_one(client, settings, cert_name, cert_config)
+            _issue_one(client, inf_config, settings, cert_name, cert_config)
+    finally:
+        client.close()
 
     console.print("\n[green]All certificates issued.[/green]")
 
@@ -51,7 +64,14 @@ def renew_due(settings: PsiSettings) -> None:
     state_dir = _tls_state_dir(settings)
     any_renewed = False
 
-    with InfisicalClient.from_settings(settings) as client:
+    inf_config = _get_infisical_config(settings)
+    client = InfisicalClient(
+        inf_config.api_url,
+        settings.state_dir,
+        inf_config.token.ttl,
+        inf_config.verify_ssl,
+    )
+    try:
         for cert_name, cert_config in tls.certificates.items():
             state = _load_state(state_dir, cert_name)
             if not state:
@@ -63,12 +83,14 @@ def renew_due(settings: PsiSettings) -> None:
             renew_before_s = _parse_duration_seconds(cert_config.renew_before)
             if _needs_renewal(state, renew_before_s):
                 console.print(f"\n[bold]Renewing: {cert_name}[/bold]")
-                _renew_one(client, settings, cert_name, cert_config, state)
+                _renew_one(client, inf_config, settings, cert_name, cert_config, state)
                 any_renewed = True
             else:
                 remaining = state.expires_at - time.time()
                 days = int(remaining / 86400)
                 console.print(f"  [green]{cert_name}:[/green] valid, {days} days remaining")
+    finally:
+        client.close()
 
     if not any_renewed:
         console.print("\n[green]No renewals needed.[/green]")
@@ -165,12 +187,18 @@ def build_tls_status_table(
 # --- Internal helpers ---
 
 
+def _get_infisical_config(settings: PsiSettings) -> InfisicalConfig:
+    """Extract InfisicalConfig from PsiSettings."""
+    return InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
+
+
 def _require_tls(settings: PsiSettings) -> Any:
     """Return TLS config or exit if not configured."""
-    if not settings.tls:
+    inf_config = _get_infisical_config(settings)
+    if not inf_config.tls:
         console.print("[red]No TLS configuration found in config.[/red]")
         raise SystemExit(1)
-    return settings.tls
+    return inf_config.tls
 
 
 def _tls_state_dir(settings: PsiSettings) -> Path:
@@ -263,13 +291,14 @@ def _run_hooks(hooks: list[str], cert_name: str) -> bool:
 
 def _issue_one(
     client: InfisicalClient,
+    inf_config: InfisicalConfig,
     settings: PsiSettings,
     cert_name: str,
     cert_config: CertificateConfig,
 ) -> None:
     """Issue a single certificate."""
-    project = settings.projects[cert_config.project]
-    auth = resolve_auth(project, settings)
+    project = inf_config.projects[cert_config.project]
+    auth = resolve_auth(project, inf_config)
     token = client.ensure_token(auth)
 
     alt_names = (
@@ -310,14 +339,15 @@ def _issue_one(
 
 def _renew_one(
     client: InfisicalClient,
+    inf_config: InfisicalConfig,
     settings: PsiSettings,
     cert_name: str,
     cert_config: CertificateConfig,
     old_state: CertState,
 ) -> None:
     """Renew a single certificate."""
-    project = settings.projects[cert_config.project]
-    auth = resolve_auth(project, settings)
+    project = inf_config.projects[cert_config.project]
+    auth = resolve_auth(project, inf_config)
     token = client.ensure_token(auth)
 
     console.print(f"  Renewing certificate ID {old_state.certificate_id[:12]}...")

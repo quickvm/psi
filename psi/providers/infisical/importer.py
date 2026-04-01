@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import httpx
 from rich.console import Console
 
-from psi.models import (
+from psi.providers.infisical.models import (
     ConflictPolicy,
     ImportOutcome,
     ImportResult,
@@ -20,7 +20,7 @@ from psi.models import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from psi.api import InfisicalClient
+    from psi.providers.infisical.api import InfisicalClient
 
 console = Console()
 err_console = Console(stderr=True)
