@@ -34,9 +34,9 @@ from psi.providers.infisical.cli import infisical_app  # noqa: E402
 
 app.add_typer(infisical_app)
 
-from psi.providers.nitrohsm.cli import nitrohsm_app  # noqa: E402
+from psi.providers.nitrokeyhsm.cli import nitrokeyhsm_app  # noqa: E402
 
-app.add_typer(nitrohsm_app)
+app.add_typer(nitrokeyhsm_app)
 
 console = Console()
 

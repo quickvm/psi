@@ -1,4 +1,4 @@
-"""NitroHSM CLI commands — preflight, setup-pcscd, init, store, status, test-pin."""
+"""Nitrokey HSM CLI commands — preflight, setup-pcscd, init, store, status, test-pin."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from psi.settings import load_settings
 
 console = Console()
 
-nitrohsm_app = typer.Typer(
-    name="nitrohsm",
-    help="NitroHSM provider commands.",
+nitrokeyhsm_app = typer.Typer(
+    name="nitrokeyhsm",
+    help="Nitrokey HSM provider commands.",
     no_args_is_help=True,
 )
 
@@ -27,26 +27,26 @@ ConfigOption = Annotated[
 ]
 
 
-def _get_nitrohsm_config(config: Path | None = None):  # noqa: ANN202
-    """Load settings and return NitroHSMConfig."""
-    from psi.providers.nitrohsm.models import NitroHSMConfig
+def _get_nitrokeyhsm_config(config: Path | None = None):  # noqa: ANN202
+    """Load settings and return NitrokeyHSMConfig."""
+    from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
     settings = load_settings(config, scope=detect_scope())
-    return settings, NitroHSMConfig.model_validate(
-        settings.providers.get("nitrohsm", {}),
+    return settings, NitrokeyHSMConfig.model_validate(
+        settings.providers.get("nitrokeyhsm", {}),
     )
 
 
 # --- Preflight ---
 
 
-@nitrohsm_app.command()
+@nitrokeyhsm_app.command()
 def preflight(config: ConfigOption = None) -> None:
-    """Check all prerequisites for the NitroHSM provider."""
-    settings, hsm_config = _get_nitrohsm_config(config)
+    """Check all prerequisites for the Nitrokey HSM provider."""
+    settings, hsm_config = _get_nitrokeyhsm_config(config)
     failed = False
 
-    console.print("[bold]NitroHSM Preflight Check[/bold]\n")
+    console.print("[bold]Nitrokey HSM Preflight Check[/bold]\n")
 
     # 1. PKCS#11 module
     module_path = Path(hsm_config.pkcs11_module)
@@ -66,7 +66,7 @@ def preflight(config: ConfigOption = None) -> None:
     else:
         console.print(
             f"  [red]FAIL[/red] pcscd socket not found: {pcscd_socket}\n"
-            "        Run 'psi nitrohsm setup-pcscd' or start pcscd manually"
+            "        Run 'psi nitrokeyhsm setup-pcscd' or start pcscd manually"
         )
         failed = True
 
@@ -75,7 +75,7 @@ def preflight(config: ConfigOption = None) -> None:
     if pin_source == "not configured":
         console.print(
             "  [red]FAIL[/red] No HSM PIN source configured\n"
-            "        Set pin in config, PSI_NITROHSM_PIN env, or "
+            "        Set pin in config, PSI_NITROKEYHSM_PIN env, or "
             "use systemd LoadCredentialEncrypted=hsm-pin"
         )
         failed = True
@@ -84,8 +84,8 @@ def preflight(config: ConfigOption = None) -> None:
 
     # 4. HSM connectivity and login
     if not failed:
-        from psi.providers.nitrohsm.pin import resolve_pin
-        from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+        from psi.providers.nitrokeyhsm.pin import resolve_pin
+        from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
         try:
             pin = resolve_pin(hsm_config)
@@ -112,14 +112,14 @@ def preflight(config: ConfigOption = None) -> None:
         console.print("  [yellow]SKIP[/yellow] HSM connectivity (fix above issues first)")
 
     # 6. Public key cache
-    cache_path = hsm_config.public_key_cache or settings.state_dir / "nitrohsm-pubkey.der"
+    cache_path = hsm_config.public_key_cache or settings.state_dir / "nitrokeyhsm-pubkey.der"
     if cache_path.exists():
         console.print(f"  [green]PASS[/green] Public key cache: {cache_path}")
     else:
         console.print(
             f"  [yellow]WARN[/yellow] Public key cache not found: "
             f"{cache_path}\n"
-            "        Run 'psi nitrohsm init' to extract and cache it"
+            "        Run 'psi nitrokeyhsm init' to extract and cache it"
         )
 
     # 7. State directory
@@ -186,7 +186,7 @@ WantedBy=default.target
 """
 
 
-@nitrohsm_app.command(name="setup-pcscd")
+@nitrokeyhsm_app.command(name="setup-pcscd")
 def setup_pcscd(
     config: ConfigOption = None,
     build_dir: Annotated[
@@ -213,7 +213,7 @@ def setup_pcscd(
 
     Requires: SELinux boolean container_use_devices=on for USB access.
     """
-    settings, hsm_config = _get_nitrohsm_config(config)
+    settings, hsm_config = _get_nitrokeyhsm_config(config)
     volume_name = hsm_config.pcscd_volume
     quad_dir = systemd_dir or settings.systemd_dir
 
@@ -300,13 +300,13 @@ def _check_selinux_device_access() -> None:
 # --- Existing commands ---
 
 
-@nitrohsm_app.command()
+@nitrokeyhsm_app.command()
 def init(config: ConfigOption = None) -> None:
     """Extract the public key from HSM and cache it locally."""
-    from psi.providers.nitrohsm.pin import resolve_pin
-    from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+    from psi.providers.nitrokeyhsm.pin import resolve_pin
+    from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
-    settings, hsm_config = _get_nitrohsm_config(config)
+    settings, hsm_config = _get_nitrokeyhsm_config(config)
     pin = resolve_pin(hsm_config)
 
     session = PKCS11Session(hsm_config)
@@ -318,7 +318,7 @@ def init(config: ConfigOption = None) -> None:
 
     cache_path = hsm_config.public_key_cache
     if not cache_path:
-        cache_path = settings.state_dir / "nitrohsm-pubkey.der"
+        cache_path = settings.state_dir / "nitrokeyhsm-pubkey.der"
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_bytes(der)
@@ -326,13 +326,13 @@ def init(config: ConfigOption = None) -> None:
     console.print(f"[green]Public key cached: {cache_path} ({len(der)} bytes)[/green]")
 
 
-@nitrohsm_app.command(name="test-pin")
+@nitrokeyhsm_app.command(name="test-pin")
 def test_pin(config: ConfigOption = None) -> None:
     """Verify PIN resolution and HSM login."""
-    from psi.providers.nitrohsm.pin import resolve_pin
-    from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+    from psi.providers.nitrokeyhsm.pin import resolve_pin
+    from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
-    _, hsm_config = _get_nitrohsm_config(config)
+    _, hsm_config = _get_nitrokeyhsm_config(config)
 
     try:
         pin = resolve_pin(hsm_config)
@@ -355,15 +355,15 @@ def test_pin(config: ConfigOption = None) -> None:
         session.close()
 
 
-@nitrohsm_app.command()
+@nitrokeyhsm_app.command()
 def status(config: ConfigOption = None) -> None:
     """Show HSM connection status and key info."""
-    from psi.providers.nitrohsm.pin import resolve_pin
-    from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+    from psi.providers.nitrokeyhsm.pin import resolve_pin
+    from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
-    settings, hsm_config = _get_nitrohsm_config(config)
+    settings, hsm_config = _get_nitrokeyhsm_config(config)
 
-    console.print("[bold]NitroHSM Provider Status[/bold]\n")
+    console.print("[bold]Nitrokey HSM Provider Status[/bold]\n")
     console.print(f"  PKCS#11 module: {hsm_config.pkcs11_module}")
     console.print(f"  Slot: {hsm_config.slot}")
     console.print(f"  Key label: {hsm_config.key_label}")
@@ -373,12 +373,12 @@ def status(config: ConfigOption = None) -> None:
     pin_source = _describe_pin_source(hsm_config)
     console.print(f"  PIN source: {pin_source}")
 
-    cache_path = hsm_config.public_key_cache or settings.state_dir / "nitrohsm-pubkey.der"
+    cache_path = hsm_config.public_key_cache or settings.state_dir / "nitrokeyhsm-pubkey.der"
     if cache_path.exists():
         size = cache_path.stat().st_size
         console.print(f"  Public key cache: {cache_path} ({size} bytes)")
     else:
-        console.print("  Public key cache: [yellow]not found[/yellow] (run 'psi nitrohsm init')")
+        console.print("  Public key cache: [yellow]not found[/yellow] (run 'psi nitrokeyhsm init')")
 
     try:
         pin = resolve_pin(hsm_config)
@@ -390,18 +390,18 @@ def status(config: ConfigOption = None) -> None:
         console.print(f"  HSM connection: [red]FAILED[/red] ({e})")
 
 
-@nitrohsm_app.command()
+@nitrokeyhsm_app.command()
 def store(
     name: Annotated[str, typer.Argument(help="Podman secret name.")],
     config: ConfigOption = None,
 ) -> None:
     """Encrypt a secret value from stdin and store it.
 
-    Usage: echo -n "my-secret" | psi nitrohsm store my-secret-name
+    Usage: echo -n "my-secret" | psi nitrokeyhsm store my-secret-name
     """
     import sys
 
-    from psi.providers.nitrohsm import NitroHSMProvider
+    from psi.providers.nitrokeyhsm import NitrokeyHSMProvider
 
     settings = load_settings(config, scope=detect_scope())
     plaintext = sys.stdin.buffer.read()
@@ -409,7 +409,7 @@ def store(
         console.print("[red]No data on stdin.[/red]")
         raise typer.Exit(1)
 
-    provider = NitroHSMProvider(settings)
+    provider = NitrokeyHSMProvider(settings)
     provider.open()
     try:
         provider.store(name, plaintext)
@@ -436,6 +436,6 @@ def _describe_pin_source(config) -> str:  # noqa: ANN001
             return f"systemd credential ({pin_path})"
     if config.pin:
         return "config file"
-    if os.environ.get("PSI_NITROHSM_PIN"):
-        return "PSI_NITROHSM_PIN env var"
+    if os.environ.get("PSI_NITROKEYHSM_PIN"):
+        return "PSI_NITROKEYHSM_PIN env var"
     return "not configured"

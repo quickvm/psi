@@ -1,4 +1,4 @@
-"""NitroHSM provider models and configuration."""
+"""Nitrokey HSM provider models and configuration."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path  # noqa: TCH003 — Pydantic needs Path at runtime
 from pydantic import BaseModel
 
 
-class NitroHSMConfig(BaseModel):
-    """Configuration for the NitroHSM provider."""
+class NitrokeyHSMConfig(BaseModel):
+    """Configuration for the Nitrokey HSM provider."""
 
     pkcs11_module: str = "/usr/lib64/pkcs11/opensc-pkcs11.so"
     slot: int = 0

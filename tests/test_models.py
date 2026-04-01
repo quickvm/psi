@@ -78,10 +78,10 @@ class TestParseMapping:
         assert data["provider"] == "infisical"
         assert data["project"] == "myproj"
 
-    def test_nitrohsm_mapping(self) -> None:
-        raw = json.dumps({"provider": "nitrohsm", "blob": "base64data"})
+    def test_nitrokeyhsm_mapping(self) -> None:
+        raw = json.dumps({"provider": "nitrokeyhsm", "blob": "base64data"})
         data = parse_mapping(raw)
-        assert data["provider"] == "nitrohsm"
+        assert data["provider"] == "nitrokeyhsm"
 
     def test_invalid_json(self) -> None:
         with pytest.raises(ValueError, match="not JSON"):

@@ -10,7 +10,7 @@ Built for [Fedora CoreOS](https://fedoraproject.org/coreos/) but works anywhere 
 | Provider | How it works | Use case |
 |----------|-------------|----------|
 | **Infisical** | Fetches secrets from an [Infisical](https://infisical.com) instance at lookup time | Primary secret management for all services |
-| **NitroHSM** | Encrypts secrets at store time and decrypts via a [Nitrokey HSM](https://www.nitrokey.com/products/nitrokey-hsm-2) at lookup time | Bootstrap secrets that can't come from a secrets manager (e.g. Infisical's own credentials) |
+| **Nitrokey HSM** | Encrypts secrets at store time and decrypts via a [Nitrokey HSM](https://www.nitrokey.com/products/nitrokey-hsm-2) at lookup time | Bootstrap secrets that can't come from a secrets manager (e.g. Infisical's own credentials) |
 
 Both providers run behind a single PSI serve process. Podman doesn't know or care which provider
 handles a given secret — the JSON mapping stored in the state directory includes a `provider` field
@@ -32,7 +32,7 @@ Container start:
   Podman → Secret=myapp--DB_HOST,type=env,target=DB_HOST
          → shell driver calls: curl /run/psi/psi.sock/lookup/{secret_id}
          → PSI reads JSON mapping from state_dir
-         → dispatches to the correct provider (infisical or nitrohsm)
+         → dispatches to the correct provider (infisical or nitrokeyhsm)
          → returns decrypted/fetched value to Podman → injected as env var
 ```
 
@@ -136,14 +136,14 @@ Auth methods: `universal-auth`, `aws-iam`, `gcp`, `azure`. Global auth covers al
 
 See the [Infisical provider reference](docs/infisical-provider.md) for the full documentation.
 
-### Provider: NitroHSM
+### Provider: Nitrokey HSM
 
 Encrypts secrets with a Nitrokey HSM at store time. Decrypts via PKCS#11 at lookup time. Uses hybrid
 encryption (AES-256-GCM + RSA-OAEP-SHA256) so secrets of any size are supported.
 
 ```yaml
 providers:
-  nitrohsm:
+  nitrokeyhsm:
     pkcs11_module: /usr/lib64/pkcs11/opensc-pkcs11.so
     slot: 0
     key_label: podman-secrets
@@ -152,12 +152,12 @@ providers:
     # PIN options (pick one):
     # pin: "12345678"                    # direct (dev/simple setups)
     # Or use systemd LoadCredentialEncrypted=hsm-pin for production (TPM-sealed)
-    # Or set PSI_NITROHSM_PIN env var
+    # Or set PSI_NITROKEYHSM_PIN env var
 ```
 
-PIN resolution order: `$CREDENTIALS_DIRECTORY/hsm-pin` → config `pin` → `PSI_NITROHSM_PIN` env var.
+PIN resolution order: `$CREDENTIALS_DIRECTORY/hsm-pin` → config `pin` → `PSI_NITROKEYHSM_PIN` env var.
 
-See the [NitroHSM provider reference](docs/nitrohsm-provider.md) for the full documentation.
+See the [Nitrokey HSM provider reference](docs/nitrokeyhsm-provider.md) for the full documentation.
 
 ### Workloads
 
@@ -174,9 +174,9 @@ workloads:
       - project: myproject
         path: /myapp
 
-  # NitroHSM workload — secrets encrypted and stored via CLI
+  # Nitrokey HSM workload — secrets encrypted and stored via CLI
   infisical:
-    provider: nitrohsm
+    provider: nitrokeyhsm
 ```
 
 ### Workload dependencies
@@ -199,16 +199,16 @@ Secret=myapp--DATABASE_HOST,type=env,target=DATABASE_HOST
 
 The container sees `DATABASE_HOST` — the namespace prefix is transparent.
 
-## NitroHSM setup
+## Nitrokey HSM setup
 
-The NitroHSM provider requires a pcscd sidecar container to communicate with the USB smartcard. PSI
+The Nitrokey HSM provider requires a pcscd sidecar container to communicate with the USB smartcard. PSI
 includes commands to set this up.
 
 ### 1. Set up pcscd sidecar
 
 ```bash
 # Builds the pcscd container image and installs systemd quadlets
-sudo psi nitrohsm setup-pcscd
+sudo psi nitrokeyhsm setup-pcscd
 
 # Start it
 sudo systemctl start pcscd.service
@@ -221,7 +221,7 @@ on SELinux systems (the command checks and warns).
 ### 2. Run preflight checks
 
 ```bash
-sudo psi nitrohsm preflight
+sudo psi nitrokeyhsm preflight
 ```
 
 Checks: PKCS#11 module exists, pcscd socket present, PIN resolvable, HSM reachable, key exists,
@@ -230,7 +230,7 @@ state directory ready.
 ### 3. Initialize the public key cache
 
 ```bash
-sudo psi nitrohsm init
+sudo psi nitrokeyhsm init
 ```
 
 Extracts the RSA public key from the HSM and caches it locally for software-side encryption.
@@ -259,7 +259,7 @@ Volume=pcscd-socket:/run/pcscd:rw
 ### 5. Encrypt secrets
 
 ```bash
-echo -n "my-secret-value" | sudo podman exec -i psi-secrets psi nitrohsm store MY_SECRET
+echo -n "my-secret-value" | sudo podman exec -i psi-secrets psi nitrokeyhsm store MY_SECRET
 ```
 
 ### 6. Register with Podman
@@ -306,15 +306,15 @@ psi infisical import podman-secret Import from Podman secret store
 psi infisical import quadlet       Import from quadlet .container files
 ```
 
-### NitroHSM provider
+### Nitrokey HSM provider
 
 ```
-psi nitrohsm preflight            Check all prerequisites
-psi nitrohsm setup-pcscd          Set up the pcscd sidecar container
-psi nitrohsm init                 Extract and cache public key from HSM
-psi nitrohsm store                Encrypt a secret from stdin
-psi nitrohsm test-pin             Verify PIN resolution and HSM login
-psi nitrohsm status               Show HSM connection and key info
+psi nitrokeyhsm preflight            Check all prerequisites
+psi nitrokeyhsm setup-pcscd          Set up the pcscd sidecar container
+psi nitrokeyhsm init                 Extract and cache public key from HSM
+psi nitrokeyhsm store                Encrypt a secret from stdin
+psi nitrokeyhsm test-pin             Verify PIN resolution and HSM login
+psi nitrokeyhsm status               Show HSM connection and key info
 ```
 
 All commands accept `--config/-c` or the `PSI_CONFIG` env var.

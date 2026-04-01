@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.serialization import load_der_public_key
 
 if TYPE_CHECKING:
-    from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+    from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
 _AES_KEY_SIZE = 32
 _NONCE_SIZE = 12

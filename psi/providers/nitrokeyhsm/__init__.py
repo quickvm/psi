@@ -1,4 +1,4 @@
-"""NitroHSM provider — encrypt/decrypt secrets via Nitrokey HSM."""
+"""Nitrokey HSM provider — encrypt/decrypt secrets via Nitrokey HSM."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any
 
-from psi.providers.nitrohsm.models import NitroHSMConfig
+from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
 
-class NitroHSMProvider:
+class NitrokeyHSMProvider:
     """Secret provider that encrypts/decrypts via Nitrokey HSM.
 
     Store: encrypts plaintext with the HSM's public key (software-side),
@@ -21,19 +21,19 @@ class NitroHSMProvider:
             decrypts data with AES-GCM, returns plaintext.
     """
 
-    name = "nitrohsm"
+    name = "nitrokeyhsm"
 
     def __init__(self, settings: PsiSettings) -> None:
-        raw = settings.providers.get("nitrohsm", {})
-        self.config = NitroHSMConfig.model_validate(raw)
+        raw = settings.providers.get("nitrokeyhsm", {})
+        self.config = NitrokeyHSMConfig.model_validate(raw)
         self.state_dir = settings.state_dir
         self._session: Any = None
         self._public_key_der: bytes | None = None
 
     def open(self) -> None:
         """Open PKCS#11 session, log in, and cache the public key."""
-        from psi.providers.nitrohsm.pin import resolve_pin
-        from psi.providers.nitrohsm.pkcs11 import PKCS11Session
+        from psi.providers.nitrokeyhsm.pin import resolve_pin
+        from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
         pin = resolve_pin(self.config)
         self._session = PKCS11Session(self.config)
@@ -55,15 +55,15 @@ class NitroHSMProvider:
         Returns:
             Decrypted plaintext bytes.
         """
-        from psi.providers.nitrohsm.crypto import decrypt
+        from psi.providers.nitrokeyhsm.crypto import decrypt
 
         if not self._session:
-            msg = "NitroHSMProvider not open"
+            msg = "NitrokeyHSMProvider not open"
             raise RuntimeError(msg)
 
         blob_b64 = mapping_data.get("blob")
         if not blob_b64:
-            msg = "NitroHSM mapping missing 'blob' field"
+            msg = "Nitrokey HSM mapping missing 'blob' field"
             raise ValueError(msg)
 
         envelope = base64.b64decode(blob_b64)
@@ -76,16 +76,16 @@ class NitroHSMProvider:
             secret_id: The Podman secret ID.
             plaintext: Secret value to encrypt.
         """
-        from psi.providers.nitrohsm.crypto import encrypt
+        from psi.providers.nitrokeyhsm.crypto import encrypt
 
         if not self._public_key_der:
-            msg = "NitroHSMProvider not open (no public key)"
+            msg = "NitrokeyHSMProvider not open (no public key)"
             raise RuntimeError(msg)
 
         envelope = encrypt(plaintext, self._public_key_der)
         mapping = json.dumps(
             {
-                "provider": "nitrohsm",
+                "provider": "nitrokeyhsm",
                 "blob": base64.b64encode(envelope).decode(),
             }
         )

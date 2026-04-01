@@ -1,9 +1,9 @@
-"""PIN resolution for NitroHSM provider.
+"""PIN resolution for Nitrokey HSM provider.
 
 Resolution order:
 1. $CREDENTIALS_DIRECTORY/hsm-pin (systemd-creds / TPM)
 2. Config 'pin' field
-3. PSI_NITROHSM_PIN env var
+3. PSI_NITROKEYHSM_PIN env var
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from psi.providers.nitrohsm.models import NitroHSMConfig
+    from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
 
-def resolve_pin(config: NitroHSMConfig) -> str:
+def resolve_pin(config: NitrokeyHSMConfig) -> str:
     """Resolve the HSM PIN from credentials, config, or environment.
 
     Returns:
@@ -34,7 +34,7 @@ def resolve_pin(config: NitroHSMConfig) -> str:
     if config.pin:
         return config.pin
 
-    env_pin = os.environ.get("PSI_NITROHSM_PIN")
+    env_pin = os.environ.get("PSI_NITROKEYHSM_PIN")
     if env_pin:
         return env_pin
 
@@ -42,7 +42,7 @@ def resolve_pin(config: NitroHSMConfig) -> str:
         "No HSM PIN found. Provide it via one of:\n"
         "  1. systemd LoadCredentialEncrypted=hsm-pin "
         "(sets $CREDENTIALS_DIRECTORY)\n"
-        "  2. 'pin' field in providers.nitrohsm config\n"
-        "  3. PSI_NITROHSM_PIN environment variable"
+        "  2. 'pin' field in providers.nitrokeyhsm config\n"
+        "  3. PSI_NITROKEYHSM_PIN environment variable"
     )
     raise RuntimeError(msg)

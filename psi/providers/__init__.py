@@ -15,9 +15,9 @@ def create_provider(name: str, settings: PsiSettings) -> SecretProvider:
         from psi.providers.infisical import InfisicalProvider
 
         return InfisicalProvider(settings)
-    if name == "nitrohsm":
-        from psi.providers.nitrohsm import NitroHSMProvider
+    if name == "nitrokeyhsm":
+        from psi.providers.nitrokeyhsm import NitrokeyHSMProvider
 
-        return NitroHSMProvider(settings)
-    msg = f"Unknown provider: {name!r}. Available: infisical, nitrohsm"
+        return NitrokeyHSMProvider(settings)
+    msg = f"Unknown provider: {name!r}. Available: infisical, nitrokeyhsm"
     raise ValueError(msg)

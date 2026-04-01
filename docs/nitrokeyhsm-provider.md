@@ -1,6 +1,6 @@
-# NitroHSM Provider
+# Nitrokey HSM Provider
 
-The NitroHSM provider encrypts secrets at store time and decrypts them at
+The Nitrokey HSM provider encrypts secrets at store time and decrypts them at
 container start using a Nitrokey HSM via PKCS#11. Secrets are stored as
 encrypted blobs on disk — the plaintext never touches the filesystem.
 
@@ -19,8 +19,8 @@ encrypted blobs on disk — the plaintext never touches the filesystem.
 | Method | Config | Security |
 |---|---|---|
 | systemd credential (TPM) | `LoadCredentialEncrypted=hsm-pin` on the service unit | PIN sealed to vTPM, only decryptable on this VM |
-| Config file | `pin: "12345678"` in `providers.nitrohsm` | Plaintext in config — acceptable for dev/isolated setups |
-| Environment variable | `PSI_NITROHSM_PIN=12345678` | Passed at runtime |
+| Config file | `pin: "12345678"` in `providers.nitrokeyhsm` | Plaintext in config — acceptable for dev/isolated setups |
+| Environment variable | `PSI_NITROKEYHSM_PIN=12345678` | Passed at runtime |
 
 Resolution order: systemd credential → config → env var.
 
@@ -40,7 +40,7 @@ The encrypted credential is only decryptable on this specific machine's TPM.
 
 ```yaml
 providers:
-  nitrohsm:
+  nitrokeyhsm:
     pkcs11_module: /usr/lib64/pkcs11/opensc-pkcs11.so
     slot: 0
     key_label: podman-secrets
@@ -51,11 +51,11 @@ providers:
 
 ## PSI Serve Startup
 
-When `psi serve` starts, the NitroHSM provider initializes:
+When `psi serve` starts, the Nitrokey HSM provider initializes:
 
 1. **PIN resolution** — reads `$CREDENTIALS_DIRECTORY/hsm-pin` (set by
    systemd from `LoadCredentialEncrypted`), falls back to config `pin`
-   field, then `PSI_NITROHSM_PIN` env var
+   field, then `PSI_NITROKEYHSM_PIN` env var
 2. **PKCS#11 session** — loads the OpenSC module, opens a session on the
    configured slot via the pcscd socket, and logs in with the PIN
 3. **Public key cache** — extracts the RSA public key from the HSM (or
@@ -82,10 +82,10 @@ LoadCredentialEncrypted=hsm-pin
 ## Encrypting a Secret (Store)
 
 ```bash
-echo -n "my-secret-value" | podman exec -i psi-secrets psi nitrohsm store SECRET_NAME
+echo -n "my-secret-value" | podman exec -i psi-secrets psi nitrokeyhsm store SECRET_NAME
 ```
 
-What happens inside `NitroHSMProvider.store()`:
+What happens inside `Nitrokey HSMProvider.store()`:
 
 1. Generate a random 32-byte AES-256 key
 2. Generate a random 12-byte nonce
@@ -97,7 +97,7 @@ What happens inside `NitroHSMProvider.store()`:
 6. Base64-encode the envelope
 7. Write a JSON mapping to `/var/lib/psi/SECRET_NAME`:
    ```json
-   {"provider": "nitrohsm", "blob": "<base64 envelope>"}
+   {"provider": "nitrokeyhsm", "blob": "<base64 envelope>"}
    ```
 8. Set file permissions to `0600`
 
@@ -114,10 +114,10 @@ Container start
     curl --unix-socket /run/psi/psi.sock http://localhost/lookup/SECRET_NAME
 ```
 
-What happens inside `NitroHSMProvider.lookup()`:
+What happens inside `Nitrokey HSMProvider.lookup()`:
 
 1. Read the JSON mapping from `/var/lib/psi/SECRET_NAME`
-2. Parse the `provider` field — dispatches to NitroHSM
+2. Parse the `provider` field — dispatches to Nitrokey HSM
 3. Base64-decode the blob
 4. Unpack the envelope: extract `encrypted_aes_key`, `nonce`,
    `ciphertext+tag`
@@ -148,16 +148,16 @@ An attacker needs **all three** to recover a secret:
 
 ```bash
 # Extract public key from HSM and cache locally
-psi nitrohsm init
+psi nitrokeyhsm init
 
 # Encrypt a secret from stdin
-echo -n "value" | podman exec -i psi-secrets psi nitrohsm store SECRET_NAME
+echo -n "value" | podman exec -i psi-secrets psi nitrokeyhsm store SECRET_NAME
 
 # Verify PIN resolution and HSM connectivity
-psi nitrohsm test-pin
+psi nitrokeyhsm test-pin
 
 # Show provider status (HSM connection, key info, cache)
-psi nitrohsm status
+psi nitrokeyhsm status
 ```
 
 ## Hybrid Encryption Rationale

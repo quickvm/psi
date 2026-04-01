@@ -22,13 +22,13 @@ from PyKCS11.LowLevel import CKG_MGF1_SHA256
 if TYPE_CHECKING:
     from PyKCS11 import Session
 
-    from psi.providers.nitrohsm.models import NitroHSMConfig
+    from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
 
 class PKCS11Session:
     """Manage a PKCS#11 session with a Nitrokey HSM."""
 
-    def __init__(self, config: NitroHSMConfig) -> None:
+    def __init__(self, config: NitrokeyHSMConfig) -> None:
         self._config = config
         self._lib: PyKCS11Lib | None = None
         self._session: Session | None = None

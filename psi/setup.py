@@ -36,9 +36,9 @@ def run_setup(settings: PsiSettings) -> None:
 
         if workload.provider == "infisical":
             _setup_infisical_workload(settings, workload_name)
-        elif workload.provider == "nitrohsm":
+        elif workload.provider == "nitrokeyhsm":
             console.print(
-                "  [dim]NitroHSM workload — secrets created via 'psi nitrohsm store'[/dim]"
+                "  [dim]Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'[/dim]"
             )
         else:
             console.print(f"  [yellow]Unknown provider '{workload.provider}', skipping[/yellow]")

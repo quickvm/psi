@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 infisical = ["boto3>=1.38.0"]
-nitrohsm = ["PyKCS11>=1.5.12", "cryptography>=44.0.0"]
+nitrokeyhsm = ["PyKCS11>=1.5.12", "cryptography>=44.0.0"]
 dbus = ["dbus-python>=1.3.2"]
 all = [
     "boto3>=1.38.0",
