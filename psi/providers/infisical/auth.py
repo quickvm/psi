@@ -77,9 +77,11 @@ def _aws_iam_login(
     auth: AuthConfig,
 ) -> tuple[str, int]:
     """Sign an STS GetCallerIdentity request and send to Infisical."""
-    from botocore.auth import SigV4Auth
-    from botocore.awsrequest import AWSRequest
-    from botocore.session import Session
+    from botocore.auth import (  # ty: ignore[unresolved-import]  # optional: infisical extra
+        SigV4Auth,
+    )
+    from botocore.awsrequest import AWSRequest  # ty: ignore[unresolved-import]
+    from botocore.session import Session  # ty: ignore[unresolved-import]
 
     session = Session()
     credentials = session.get_credentials()

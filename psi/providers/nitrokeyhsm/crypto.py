@@ -25,10 +25,14 @@ import os
 import struct
 from typing import TYPE_CHECKING
 
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.hashes import SHA256
-from cryptography.hazmat.primitives.serialization import load_der_public_key
+from cryptography.hazmat.primitives.asymmetric import (  # ty: ignore[unresolved-import]  # optional: nitrokeyhsm extra
+    padding,
+)
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # ty: ignore[unresolved-import]
+from cryptography.hazmat.primitives.hashes import SHA256  # ty: ignore[unresolved-import]
+from cryptography.hazmat.primitives.serialization import (  # ty: ignore[unresolved-import]
+    load_der_public_key,
+)
 
 if TYPE_CHECKING:
     from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session

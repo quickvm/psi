@@ -105,4 +105,4 @@ def load_settings(
             env_prefix="PSI_",
         )
 
-    return _Settings(scope=scope)  # ty: ignore[missing-argument]
+    return _Settings(scope=scope)

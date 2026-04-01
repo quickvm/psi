@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyKCS11 import (
+from PyKCS11 import (  # ty: ignore[unresolved-import]  # optional: nitrokeyhsm extra
     CKA_CLASS,
     CKA_ID,
     CKA_LABEL,
@@ -17,10 +17,10 @@ from PyKCS11 import (
     PyKCS11Lib,
     RSAOAEPMechanism,
 )
-from PyKCS11.LowLevel import CKG_MGF1_SHA256
+from PyKCS11.LowLevel import CKG_MGF1_SHA256  # ty: ignore[unresolved-import]
 
 if TYPE_CHECKING:
-    from PyKCS11 import Session
+    from PyKCS11 import Session  # ty: ignore[unresolved-import]
 
     from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
@@ -95,7 +95,7 @@ class PKCS11Session:
             )
             raise RuntimeError(msg)
 
-        from PyKCS11 import CKA_MODULUS, CKA_PUBLIC_EXPONENT
+        from PyKCS11 import CKA_MODULUS, CKA_PUBLIC_EXPONENT  # ty: ignore[unresolved-import]
 
         attrs = self._session.getAttributeValue(
             objects[0],
@@ -134,10 +134,10 @@ def _build_rsa_der_public_key(modulus: bytes, exponent: bytes) -> bytes:
 
     Uses the cryptography library to construct the key properly.
     """
-    from cryptography.hazmat.primitives.asymmetric.rsa import (
+    from cryptography.hazmat.primitives.asymmetric.rsa import (  # ty: ignore[unresolved-import]
         RSAPublicNumbers,
     )
-    from cryptography.hazmat.primitives.serialization import (
+    from cryptography.hazmat.primitives.serialization import (  # ty: ignore[unresolved-import]
         Encoding,
         PublicFormat,
     )
