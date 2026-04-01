@@ -94,6 +94,55 @@ class TestWorkloadProviderValidation:
         assert "app" in settings.workloads
 
 
+class TestTemplateUnitWorkloadValidation:
+    def test_template_workload_passes_validation(self, tmp_path: Path) -> None:
+        config = {
+            "providers": {
+                "infisical": {
+                    "auth": {"method": "aws-iam", "identity_id": "id"},
+                    "projects": {"homelab": {"id": "uuid"}},
+                },
+            },
+            "workloads": {
+                "windmill-worker@": {
+                    "provider": "infisical",
+                    "secrets": [
+                        {"project": "homelab", "path": "/windmill"},
+                        {"project": "homelab", "path": "/windmill/worker"},
+                    ],
+                },
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        assert "windmill-worker@" in settings.workloads
+        assert len(settings.workloads["windmill-worker@"].secrets) == 2
+
+    def test_template_alongside_regular_workload(self, tmp_path: Path) -> None:
+        config = {
+            "providers": {
+                "infisical": {
+                    "auth": {"method": "aws-iam", "identity_id": "id"},
+                    "projects": {"homelab": {"id": "uuid"}},
+                },
+            },
+            "workloads": {
+                "windmill-server": {
+                    "provider": "infisical",
+                    "secrets": [{"project": "homelab", "path": "/windmill/server"}],
+                },
+                "windmill-worker@": {
+                    "provider": "infisical",
+                    "secrets": [{"project": "homelab", "path": "/windmill/worker"}],
+                },
+            },
+        }
+        config_file = _write_config(tmp_path, config)
+        settings = load_settings(config_file)
+        assert "windmill-server" in settings.workloads
+        assert "windmill-worker@" in settings.workloads
+
+
 class TestInfisicalAuthCoverage:
     def test_global_auth_covers_all_projects(self, tmp_path: Path) -> None:
         inf_config = InfisicalConfig.model_validate(
