@@ -134,7 +134,7 @@ providers:
 
 Auth methods: `universal-auth`, `aws-iam`, `gcp`, `azure`. Global auth covers all projects; per-project auth overrides it.
 
-See [docs/infisical-provider.md](docs/infisical-provider.md) for the full reference.
+See the [Infisical provider reference](docs/infisical-provider.md) for the full documentation.
 
 ### Provider: NitroHSM
 
@@ -157,7 +157,7 @@ providers:
 
 PIN resolution order: `$CREDENTIALS_DIRECTORY/hsm-pin` → config `pin` → `PSI_NITROHSM_PIN` env var.
 
-See [docs/nitrohsm-provider.md](docs/nitrohsm-provider.md) for the full reference.
+See the [NitroHSM provider reference](docs/nitrohsm-provider.md) for the full documentation.
 
 ### Workloads
 
