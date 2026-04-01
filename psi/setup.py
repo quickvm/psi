@@ -101,7 +101,7 @@ def _setup_infisical_workload(
 def _systemd_daemon_reload(scope: SystemdScope) -> None:
     """Reload systemd via D-Bus, falling back to systemctl."""
     try:
-        import dbus  # ty: ignore[unresolved-import]
+        import dbus
 
         bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
         systemd = bus.get_object(
