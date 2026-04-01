@@ -3,6 +3,16 @@ on:
   pull_request:
     branches: [master]
 
+env:
+  DOCKER_RUN: >-
+    docker run --rm
+    -v "$PWD:/src:ro"
+    -w /src
+    -e RUFF_CACHE_DIR=/tmp/ruff-cache
+    -e XDG_CACHE_HOME=/tmp/cache
+    --entrypoint bash
+    psi:test -c
+
 jobs:
   build-and-test:
     name: Build & Test
@@ -14,21 +24,13 @@ jobs:
         run: docker build -t psi:test --target test -f Containerfile .
 
       - name: Lint & Format
-        run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src \
-            --entrypoint bash psi:test -c \
-            "ruff check psi/ tests/ && ruff format --check psi/ tests/"
+        run: ${{ env.DOCKER_RUN }} "ruff check psi/ tests/ && ruff format --check psi/ tests/"
 
       - name: Type Check
-        run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src \
-            -e XDG_CACHE_HOME=/tmp/cache \
-            --entrypoint bash psi:test -c "ty check"
+        run: ${{ env.DOCKER_RUN }} "ty check"
 
       - name: Unit Tests
-        run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src \
-            --entrypoint bash psi:test -c "pytest -q"
+        run: ${{ env.DOCKER_RUN }} "pytest -q"
 
       - name: Build production container
         run: docker build -t psi:prod -f Containerfile .
