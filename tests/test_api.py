@@ -42,6 +42,30 @@ class TestListSecrets:
         assert len(secrets) == 2
         assert secrets[0]["secretKey"] == "DB_HOST"
 
+    def test_default_non_recursive(self, tmp_path: Path) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secrets": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.list_secrets("tok", "proj", "prod", "/app")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["recursive"] == "false"
+
+    def test_recursive_true(self, tmp_path: Path) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secrets": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.list_secrets("tok", "proj", "prod", "/app", recursive=True)
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["recursive"] == "true"
+
     def test_raises_on_error(self, tmp_path: Path) -> None:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(

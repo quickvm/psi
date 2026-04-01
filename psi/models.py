@@ -43,6 +43,7 @@ class SecretSource(BaseModel):
 
     project: str
     path: str = "/"
+    recursive: bool = False
 
 
 class WorkloadConfig(BaseModel):
