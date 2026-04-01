@@ -11,13 +11,10 @@ import os
 import sys
 from typing import TYPE_CHECKING, NoReturn
 
-from psi.api import InfisicalClient
-from psi.models import SecretMapping, SecretStatus, WorkloadStatus
+from psi.provider import get_provider, parse_mapping
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
-
-from psi.settings import resolve_auth
 
 
 def store(settings: PsiSettings) -> None:
@@ -31,7 +28,7 @@ def store(settings: PsiSettings) -> None:
 
 
 def lookup(settings: PsiSettings) -> None:
-    """Fetch a secret value from Infisical. Called by Podman at container start."""
+    """Fetch a secret value via the appropriate provider."""
     secret_id = _require_secret_id()
     mapping_path = settings.state_dir / secret_id
 
@@ -40,27 +37,19 @@ def lookup(settings: PsiSettings) -> None:
 
     raw = mapping_path.read_text().strip()
     try:
-        mapping = SecretMapping.deserialize(raw)
+        mapping_data = parse_mapping(raw)
     except ValueError as e:
         _fail(f"Corrupt mapping for {secret_id}: {e}")
 
-    project = settings.projects.get(mapping.project_alias)
-    if not project:
-        _fail(f"Secret {secret_id} references unknown project '{mapping.project_alias}'")
+    provider_name = mapping_data["provider"]
+    provider = get_provider(provider_name, settings)
+    provider.open()
+    try:
+        value = provider.lookup(mapping_data)
+    finally:
+        provider.close()
 
-    auth = resolve_auth(project, settings)
-
-    with InfisicalClient.from_settings(settings) as client:
-        token = client.ensure_token(auth)
-        value = client.get_secret(
-            token,
-            project.id,
-            project.environment,
-            mapping.secret_path,
-            mapping.secret_name,
-        )
-
-    sys.stdout.buffer.write(value.encode())
+    sys.stdout.buffer.write(value)
 
 
 def delete(settings: PsiSettings) -> None:
@@ -77,61 +66,6 @@ def list_secrets(settings: PsiSettings) -> None:
     for entry in sorted(settings.state_dir.iterdir()):
         if not entry.name.startswith(".") and entry.is_file():
             print(entry.name)
-
-
-def get_secret_status(settings: PsiSettings) -> list[WorkloadStatus]:
-    """Build status for all workloads from config and registered secrets."""
-    from psi.importer import _podman_api_get
-
-    all_secrets = _podman_api_get("/libpod/secrets/json").json()
-    secret_map: dict[str, str] = {}
-    for s in all_secrets:
-        secret_map[s["Spec"]["Name"]] = s["ID"]
-
-    results: list[WorkloadStatus] = []
-
-    for workload_name in settings.workloads:
-        secrets: list[SecretStatus] = []
-        prefix = f"{workload_name}--"
-
-        for name, secret_id in sorted(secret_map.items()):
-            if not name.startswith(prefix):
-                continue
-            secret_key = name[len(prefix) :]
-            mapping_path = settings.state_dir / secret_id
-            if mapping_path.exists():
-                try:
-                    mapping = SecretMapping.deserialize(mapping_path.read_text().strip())
-                    secrets.append(
-                        SecretStatus(
-                            name=secret_key,
-                            project=mapping.project_alias,
-                            path=mapping.secret_path,
-                            registered=True,
-                        )
-                    )
-                except ValueError, OSError:
-                    secrets.append(
-                        SecretStatus(
-                            name=secret_key,
-                            project="?",
-                            path="?",
-                            registered=False,
-                        )
-                    )
-            else:
-                secrets.append(
-                    SecretStatus(
-                        name=secret_key,
-                        project="?",
-                        path="?",
-                        registered=False,
-                    )
-                )
-
-        results.append(WorkloadStatus(workload=workload_name, secrets=secrets))
-
-    return results
 
 
 def _require_secret_id() -> str:

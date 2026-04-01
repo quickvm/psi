@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from psi.models import AuthConfig, TokenCache
+from psi.providers.infisical.models import AuthConfig, TokenCache
 
 if TYPE_CHECKING:
     from pathlib import Path

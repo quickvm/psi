@@ -24,6 +24,13 @@ from psi.unitgen import (
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
+
+def _has_tls(settings: PsiSettings) -> bool:
+    """Check if TLS is configured in the Infisical provider."""
+    inf_raw = settings.providers.get("infisical", {})
+    return bool(inf_raw.get("tls"))
+
+
 console = Console()
 
 
@@ -80,7 +87,7 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
         generate_native_setup_service(psi_path, scope),
     )
 
-    if settings.tls:
+    if _has_tls(settings):
         _write_unit(
             unit_dir / "psi-tls-renew.service",
             generate_native_tls_renew_service(psi_path),
@@ -95,7 +102,7 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
     if enable:
         _enable_units(
             ["psi-secrets.service", "psi-secrets-setup.service"],
-            settings.tls,
+            _has_tls(settings),
             scope,
         )
 
@@ -115,7 +122,7 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
         generate_container_setup_quadlet(image, settings),
     )
 
-    if settings.tls:
+    if _has_tls(settings):
         _write_unit(
             quadlet_dir / "psi-tls-renew.container",
             generate_container_tls_renew_quadlet(image, settings),
@@ -130,7 +137,7 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
     if enable:
         _enable_units(
             ["psi-secrets.service", "psi-secrets-setup.service"],
-            settings.tls,
+            _has_tls(settings),
             scope,
         )
 
@@ -186,6 +193,6 @@ def _find_psi_path() -> str:
     """Find the psi binary path."""
     path = shutil.which("psi")
     if not path:
-        msg = "psi not found in PATH. Install with: uv tool install podman-secret-infisical"
+        msg = "psi not found in PATH. Install with: uv tool install podman-secret-infrastructure"
         raise RuntimeError(msg)
     return path

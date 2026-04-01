@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from psi.api import InfisicalClient
+from psi.providers.infisical.api import InfisicalClient
 
 if TYPE_CHECKING:
     from pathlib import Path

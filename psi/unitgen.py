@@ -270,10 +270,16 @@ def _dbus_socket_path(scope: SystemdScope) -> str:
 
 def collect_tls_volume_dirs(settings: PsiSettings) -> set[Path]:
     """Collect unique parent directories from TLS cert output paths."""
+    from psi.providers.infisical.models import InfisicalConfig
+
     dirs: set[Path] = set()
-    if not settings.tls:
+    inf_raw = settings.providers.get("infisical", {})
+    if not inf_raw:
         return dirs
-    for cert in settings.tls.certificates.values():
+    inf_config = InfisicalConfig.model_validate(inf_raw)
+    if not inf_config.tls:
+        return dirs
+    for cert in inf_config.tls.certificates.values():
         dirs.add(cert.output.cert.parent)
         dirs.add(cert.output.key.parent)
         dirs.add(cert.output.chain.parent)

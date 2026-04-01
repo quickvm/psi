@@ -8,9 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import UnixStreamServer
 from typing import TYPE_CHECKING
 
-from psi.api import InfisicalClient
-from psi.models import SecretMapping
-from psi.settings import resolve_auth
+from psi.provider import close_all_providers, open_all_providers, parse_mapping
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
@@ -26,29 +24,35 @@ class _UnixHTTPServer(UnixStreamServer, HTTPServer):
 
 def run_serve(settings: PsiSettings, socket_path: str) -> None:
     """Start the lookup service on a Unix socket."""
-    handler = _make_handler(settings)
-
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
-
-    os.makedirs(os.path.dirname(socket_path), exist_ok=True)
-    server = _UnixHTTPServer(socket_path, handler)
-    os.chmod(socket_path, 0o600)
-
-    print(f"Listening on {socket_path}", file=sys.stderr)
+    providers = open_all_providers(settings)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+        handler = _make_handler(settings, providers)
+
         if os.path.exists(socket_path):
             os.unlink(socket_path)
 
+        os.makedirs(os.path.dirname(socket_path), exist_ok=True)
+        server = _UnixHTTPServer(socket_path, handler)
+        os.chmod(socket_path, 0o600)
 
-def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
-    """Create a request handler with access to settings and a shared client."""
-    client = InfisicalClient.from_settings(settings)
+        print(f"Listening on {socket_path}", file=sys.stderr)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+            if os.path.exists(socket_path):
+                os.unlink(socket_path)
+    finally:
+        close_all_providers(providers)
+
+
+def _make_handler(
+    settings: PsiSettings,
+    providers: dict,
+) -> type[BaseHTTPRequestHandler]:
+    """Create a request handler with access to settings and providers."""
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -98,30 +102,23 @@ def _make_handler(settings: PsiSettings) -> type[BaseHTTPRequestHandler]:
 
             raw = mapping_path.read_text().strip()
             try:
-                mapping = SecretMapping.deserialize(raw)
+                mapping_data = parse_mapping(raw)
             except ValueError:
                 self._respond(500, f"corrupt mapping: {secret_id}".encode())
                 return
 
-            project = settings.projects.get(mapping.project_alias)
-            if not project:
+            provider_name = mapping_data.get("provider", "")
+            provider = providers.get(provider_name)
+            if not provider:
                 self._respond(
                     500,
-                    f"unknown project: {mapping.project_alias}".encode(),
+                    f"unknown provider: {provider_name}".encode(),
                 )
                 return
 
-            auth = resolve_auth(project, settings)
             try:
-                token = client.ensure_token(auth)
-                value = client.get_secret(
-                    token,
-                    project.id,
-                    project.environment,
-                    mapping.secret_path,
-                    mapping.secret_name,
-                )
-                self._respond(200, value.encode())
+                value = provider.lookup(mapping_data)
+                self._respond(200, value)
             except Exception as e:
                 self._respond(502, str(e).encode())
 

@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
-from psi.importer import (
+from psi.providers.infisical.importer import (
     read_env_file,
     read_podman_secrets,
     read_quadlet,
     run_import,
 )
-from psi.models import ConflictPolicy, ImportOutcome
+from psi.providers.infisical.models import ConflictPolicy, ImportOutcome
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,7 +89,7 @@ class TestReadPodmanSecrets:
                 "/libpod/secrets/DB_PASS/json": {"SecretData": "my-password"},
             }
         )
-        with patch("psi.importer._podman_api_get", side_effect=mock_get):
+        with patch("psi.providers.infisical.importer._podman_api_get", side_effect=mock_get):
             secrets = read_podman_secrets(["DB_PASS"])
 
         assert len(secrets) == 1
@@ -107,7 +107,7 @@ class TestReadPodmanSecrets:
                 "/libpod/secrets/SECRET_B/json": {"SecretData": "val-b"},
             }
         )
-        with patch("psi.importer._podman_api_get", side_effect=mock_get):
+        with patch("psi.providers.infisical.importer._podman_api_get", side_effect=mock_get):
             secrets = read_podman_secrets(None)
 
         assert len(secrets) == 2
@@ -146,7 +146,7 @@ class TestReadQuadlet:
                 "/libpod/secrets/DB_PASS/json": {"SecretData": "s3cret"},
             }
         )
-        with patch("psi.importer._podman_api_get", side_effect=mock_get):
+        with patch("psi.providers.infisical.importer._podman_api_get", side_effect=mock_get):
             secrets = read_quadlet([container], resolve_secrets=True)
 
         assert len(secrets) == 1
@@ -182,7 +182,7 @@ class TestReadQuadlet:
                 "/libpod/secrets/DB_PASS/json": {"SecretData": "s3cret"},
             }
         )
-        with patch("psi.importer._podman_api_get", side_effect=mock_get):
+        with patch("psi.providers.infisical.importer._podman_api_get", side_effect=mock_get):
             secrets = read_quadlet([f1, f2], resolve_secrets=True)
         assert len(secrets) == 1
         assert secrets[0].key == "PASSWORD"
@@ -198,7 +198,7 @@ def _mock_client() -> Any:
 
 class TestRunImport:
     def test_dry_run_all_new(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         secrets = [ImportSecret(key="A", value="1"), ImportSecret(key="B", value="2")]
         result = run_import(
@@ -216,7 +216,7 @@ class TestRunImport:
         assert all("would create" in s.detail for s in result.secrets)
 
     def test_dry_run_with_existing(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         client.list_secrets.return_value = [{"secretKey": "A"}]
@@ -239,7 +239,7 @@ class TestRunImport:
         assert "would skip" in details["A"]
 
     def test_creates_new_secrets(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         secrets = [ImportSecret(key="NEW", value="val")]
@@ -248,7 +248,7 @@ class TestRunImport:
         client.create_secrets_batch.assert_called_once()
 
     def test_conflict_skip(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         client.list_secrets.return_value = [{"secretKey": "EXISTING"}]
@@ -266,7 +266,7 @@ class TestRunImport:
         assert result.created == 0
 
     def test_conflict_fail(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         client.list_secrets.return_value = [{"secretKey": "EXISTING"}]
@@ -283,7 +283,7 @@ class TestRunImport:
         assert result.failed == 1
 
     def test_conflict_overwrite(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         client.list_secrets.return_value = [{"secretKey": "EXISTING"}]
@@ -308,7 +308,7 @@ class TestRunImport:
         )
 
     def test_mixed_new_and_existing(self) -> None:
-        from psi.models import ImportSecret
+        from psi.providers.infisical.models import ImportSecret
 
         client = _mock_client()
         client.list_secrets.return_value = [{"secretKey": "OLD"}]

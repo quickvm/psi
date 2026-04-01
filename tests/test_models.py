@@ -1,18 +1,17 @@
-"""Tests for psi.models."""
+"""Tests for psi.models and psi.providers.infisical.models."""
 
 from __future__ import annotations
 
+import json
 import unittest.mock
 
 import pytest
 
-from psi.models import (
+from psi.models import DeployMode, SystemdScope, detect_scope
+from psi.provider import parse_mapping
+from psi.providers.infisical.models import (
     AuthConfig,
     AuthMethod,
-    DeployMode,
-    SecretMapping,
-    SystemdScope,
-    detect_scope,
 )
 
 
@@ -65,48 +64,32 @@ class TestAuthConfig:
         assert a.cache_key() != b.cache_key()
 
 
-class TestSecretMapping:
-    def test_serialize(self) -> None:
-        m = SecretMapping(
-            project_alias="infra",
-            secret_path="/app",
-            secret_name="DB_HOST",
+class TestParseMapping:
+    def test_infisical_mapping(self) -> None:
+        raw = json.dumps(
+            {
+                "provider": "infisical",
+                "project": "myproj",
+                "path": "/app",
+                "key": "DB_HOST",
+            }
         )
-        assert m.serialize() == "infra:/app:DB_HOST"
+        data = parse_mapping(raw)
+        assert data["provider"] == "infisical"
+        assert data["project"] == "myproj"
 
-    def test_deserialize(self) -> None:
-        m = SecretMapping.deserialize("infra:/app:DB_HOST")
-        assert m.project_alias == "infra"
-        assert m.secret_path == "/app"
-        assert m.secret_name == "DB_HOST"
+    def test_nitrohsm_mapping(self) -> None:
+        raw = json.dumps({"provider": "nitrohsm", "blob": "base64data"})
+        data = parse_mapping(raw)
+        assert data["provider"] == "nitrohsm"
 
-    def test_roundtrip(self) -> None:
-        original = SecretMapping(
-            project_alias="proj",
-            secret_path="/deep/path",
-            secret_name="KEY",
-        )
-        restored = SecretMapping.deserialize(original.serialize())
-        assert restored == original
+    def test_invalid_json(self) -> None:
+        with pytest.raises(ValueError, match="not JSON"):
+            parse_mapping("not-json")
 
-    def test_deserialize_with_colons_in_path(self) -> None:
-        m = SecretMapping.deserialize("proj:/path:SECRET:WITH:COLONS")
-        assert m.project_alias == "proj"
-        assert m.secret_path == "/path"
-        assert m.secret_name == "SECRET:WITH:COLONS"
-
-    def test_deserialize_invalid_no_colons(self) -> None:
-        with pytest.raises(ValueError, match="Invalid mapping format"):
-            SecretMapping.deserialize("no-colons-here")
-
-    def test_deserialize_invalid_one_colon(self) -> None:
-        with pytest.raises(ValueError, match="Invalid mapping format"):
-            SecretMapping.deserialize("only:one")
-
-    def test_deserialize_strips_whitespace(self) -> None:
-        m = SecretMapping.deserialize("  proj:/path:KEY  \n")
-        assert m.project_alias == "proj"
-        assert m.secret_name == "KEY"
+    def test_missing_provider(self) -> None:
+        with pytest.raises(ValueError, match="missing 'provider'"):
+            parse_mapping('{"key": "value"}')
 
 
 class TestDeployMode:

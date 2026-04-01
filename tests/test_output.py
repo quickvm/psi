@@ -14,7 +14,7 @@ from psi.output import render_or_json
 class TestRenderOrJson:
     def test_force_json(self, capsys) -> None:
         data = [
-            SecretStatus(name="KEY", project="proj", path="/app", registered=True),
+            SecretStatus(name="KEY", provider="infisical", detail="proj:/app", registered=True),
         ]
         table = Table()
         render_or_json(table, data, force_json=True)
@@ -26,7 +26,7 @@ class TestRenderOrJson:
 
     def test_json_on_non_tty(self, capsys) -> None:
         data = [
-            SecretStatus(name="A", project="p", path="/", registered=True),
+            SecretStatus(name="A", provider="infisical", detail="", registered=True),
         ]
         table = Table()
         with patch("psi.output.sys.stdout.isatty", return_value=False):
@@ -37,7 +37,7 @@ class TestRenderOrJson:
 
     def test_rich_table_on_tty(self) -> None:
         data = [
-            SecretStatus(name="A", project="p", path="/", registered=True),
+            SecretStatus(name="A", provider="infisical", detail="", registered=True),
         ]
         table = Table()
         table.add_column("Name")

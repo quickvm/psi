@@ -10,7 +10,7 @@ import base64
 import json
 from typing import TYPE_CHECKING
 
-from psi.models import AuthConfig, AuthMethod
+from psi.providers.infisical.models import AuthConfig, AuthMethod
 
 if TYPE_CHECKING:
     import httpx

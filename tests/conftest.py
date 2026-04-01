@@ -6,17 +6,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from psi.models import (
+from psi.models import SecretSource, WorkloadConfig
+from psi.providers.infisical.models import (
     AuthConfig,
     AuthMethod,
     CertificateConfig,
     CertOutput,
     CertState,
     ProjectConfig,
-    SecretSource,
     TlsConfig,
     TokenSettings,
-    WorkloadConfig,
 )
 
 if TYPE_CHECKING:
@@ -86,18 +85,27 @@ def cert_state() -> CertState:
 
 @pytest.fixture
 def sample_settings_dict(tmp_path: Path) -> dict:
-    """Minimal config dict for constructing PsiSettings."""
+    """Minimal config dict for constructing PsiSettings (new provider format)."""
     return {
-        "api_url": "https://infisical.test",
-        "auth": {"method": "universal-auth", "client_id": "cid", "client_secret": "csec"},
         "state_dir": str(tmp_path / "state"),
         "systemd_dir": str(tmp_path / "systemd"),
-        "token": {"ttl": 60},
-        "projects": {
-            "myproject": {"id": "proj-uuid-123", "environment": "prod"},
+        "providers": {
+            "infisical": {
+                "api_url": "https://infisical.test",
+                "auth": {
+                    "method": "universal-auth",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                },
+                "token": {"ttl": 60},
+                "projects": {
+                    "myproject": {"id": "proj-uuid-123", "environment": "prod"},
+                },
+            },
         },
         "workloads": {
             "myapp": {
+                "provider": "infisical",
                 "secrets": [{"project": "myproject", "path": "/app"}],
             },
         },

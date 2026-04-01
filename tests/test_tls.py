@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from psi.models import CertState, CertStatusInfo
-from psi.tls import (
+from psi.providers.infisical.models import CertState, CertStatusInfo
+from psi.providers.infisical.tls import (
     _needs_renewal,
     _parse_duration_seconds,
     _write_cert_files,
@@ -118,7 +118,7 @@ class TestWriteCertFiles:
         assert oct(cert_config.output.key.stat().st_mode & 0o777) == "0o600"
 
     def test_writes_ca_when_configured(self, tmp_path: Path) -> None:
-        from psi.models import CertificateConfig, CertOutput
+        from psi.providers.infisical.models import CertificateConfig, CertOutput
 
         config = CertificateConfig(
             project="p",
@@ -142,7 +142,7 @@ class TestWriteCertFiles:
         assert config.output.ca.read_text() == "---CA---"
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
-        from psi.models import CertificateConfig, CertOutput
+        from psi.providers.infisical.models import CertificateConfig, CertOutput
 
         nested = tmp_path / "deep" / "nested"
         config = CertificateConfig(
