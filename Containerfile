@@ -14,10 +14,10 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-install-project --no-dev --extra dbus --extra nitrohsm
+    uv sync --locked --no-install-project --no-dev --extra dbus --extra nitrokeyhsm
 COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --extra dbus --extra nitrohsm
+    uv sync --locked --no-dev --extra dbus --extra nitrokeyhsm
 
 FROM fedora:latest
 
