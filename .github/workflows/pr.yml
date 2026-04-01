@@ -4,30 +4,34 @@ on:
     branches: [master]
 
 jobs:
-  lint:
-    name: Lint & Format
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-      - run: uv run ruff check psi/ tests/
-      - run: uv run ruff format --check psi/ tests/
 
-  typecheck:
-    name: Type Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-      - run: uv run ty check
+      - name: Build test container
+        run: docker build -t psi:test --target test -f Containerfile .
 
-  test:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-      - run: uv run pytest -q
+      - name: Lint & Format
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            --entrypoint bash psi:test -c \
+            "ruff check psi/ tests/ && ruff format --check psi/ tests/"
+
+      - name: Type Check
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            -e XDG_CACHE_HOME=/tmp/cache \
+            --entrypoint bash psi:test -c "ty check"
+
+      - name: Unit Tests
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src \
+            --entrypoint bash psi:test -c "pytest -q"
+
+      - name: Build production container
+        run: docker build -t psi:prod -f Containerfile .
+
+      - name: Verify production entrypoint
+        run: docker run --rm psi:prod --help

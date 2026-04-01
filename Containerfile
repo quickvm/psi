@@ -19,6 +19,13 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
+# Test target — includes dev dependencies (ruff, ty, pytest)
+FROM builder AS test
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Production target
 FROM fedora:latest
 
 LABEL org.opencontainers.image.source=https://github.com/quickvm/psi
