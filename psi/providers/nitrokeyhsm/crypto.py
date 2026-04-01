@@ -25,12 +25,12 @@ import os
 import struct
 from typing import TYPE_CHECKING
 
-from cryptography.hazmat.primitives.asymmetric import (  # ty: ignore[unresolved-import]  # optional: nitrokeyhsm extra
+from cryptography.hazmat.primitives.asymmetric import (
     padding,
 )
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # ty: ignore[unresolved-import]
-from cryptography.hazmat.primitives.hashes import SHA256  # ty: ignore[unresolved-import]
-from cryptography.hazmat.primitives.serialization import (  # ty: ignore[unresolved-import]
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.serialization import (
     load_der_public_key,
 )
 
@@ -52,7 +52,13 @@ def encrypt(plaintext: bytes, public_key_der: bytes) -> bytes:
     Returns:
         Encrypted envelope bytes.
     """
-    public_key = load_der_public_key(public_key_der)
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
+
+    loaded_key = load_der_public_key(public_key_der)
+    if not isinstance(loaded_key, RSAPublicKey):
+        msg = f"Expected RSA public key, got {type(loaded_key).__name__}"
+        raise TypeError(msg)
+    public_key = loaded_key
 
     aes_key = os.urandom(_AES_KEY_SIZE)
     nonce = os.urandom(_NONCE_SIZE)
