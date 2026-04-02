@@ -72,6 +72,9 @@ class InfisicalProvider:
                 secret_path,
                 secret_name,
             )
+        except httpx.ConnectError as e:
+            msg = f"Cannot reach Infisical API at {self.config.api_url}: {e}"
+            raise ProviderError(msg, provider_name="infisical") from e
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status in (401, 403):

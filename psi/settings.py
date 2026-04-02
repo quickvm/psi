@@ -119,3 +119,8 @@ def load_settings(
             loc = " → ".join(str(p) for p in err["loc"])
             lines.append(f"  - {loc}: {err['msg']}")
         raise ConfigError("\n".join(lines)) from e
+    except Exception as e:
+        if "yaml" in type(e).__module__.lower():
+            msg = f"Invalid YAML in {yaml_path}: {e}"
+            raise ConfigError(msg) from e
+        raise
