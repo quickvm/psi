@@ -7,7 +7,7 @@ import unittest.mock
 
 import pytest
 
-from psi.models import DeployMode, SystemdScope, detect_scope
+from psi.models import DeployMode, SecretSource, SystemdScope, WorkloadConfig, detect_scope
 from psi.provider import parse_mapping
 from psi.providers.infisical.models import (
     AuthConfig,
@@ -90,6 +90,30 @@ class TestParseMapping:
     def test_missing_provider(self) -> None:
         with pytest.raises(ValueError, match="missing 'provider'"):
             parse_mapping('{"key": "value"}')
+
+
+class TestWorkloadConfigTemplateUnit:
+    """Template unit workloads use @ in the config key."""
+
+    def test_template_workload_name(self) -> None:
+        wl = WorkloadConfig(
+            provider="infisical",
+            secrets=[SecretSource(project="myproject", path="/app")],
+        )
+        workloads = {"windmill-worker@": wl}
+        assert "windmill-worker@" in workloads
+
+    def test_template_workload_in_dict(self) -> None:
+        wl = WorkloadConfig(
+            provider="infisical",
+            secrets=[
+                SecretSource(project="homelab", path="/windmill"),
+                SecretSource(project="homelab", path="/windmill/worker"),
+            ],
+        )
+        assert len(wl.secrets) == 2
+        assert wl.secrets[0].path == "/windmill"
+        assert wl.secrets[1].path == "/windmill/worker"
 
 
 class TestDeployMode:
