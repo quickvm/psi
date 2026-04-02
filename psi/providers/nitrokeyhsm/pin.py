@@ -38,6 +38,8 @@ def resolve_pin(config: NitrokeyHSMConfig) -> str:
     if env_pin:
         return env_pin
 
+    from psi.errors import ProviderError
+
     msg = (
         "No HSM PIN found. Provide it via one of:\n"
         "  1. systemd LoadCredentialEncrypted=hsm-pin "
@@ -45,4 +47,4 @@ def resolve_pin(config: NitrokeyHSMConfig) -> str:
         "  2. 'pin' field in providers.nitrokeyhsm config\n"
         "  3. PSI_NITROKEYHSM_PIN environment variable"
     )
-    raise RuntimeError(msg)
+    raise ProviderError(msg, provider_name="nitrokeyhsm")

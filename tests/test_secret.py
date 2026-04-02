@@ -7,11 +7,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from psi.errors import ProviderError
 from psi.secret import (
     _fail,
     _require_secret_id,
     delete,
     list_secrets,
+    lookup,
     store,
 )
 
@@ -125,6 +127,30 @@ class TestListSecrets:
         settings.state_dir = tmp_path / "nonexistent"
         list_secrets(settings)
         assert capsys.readouterr().out == ""
+
+
+class TestLookupProviderError:
+    def test_provider_error_prints_to_stderr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("SECRET_ID", "myapp--DB_HOST")
+        mapping = tmp_path / "myapp--DB_HOST"
+        mapping.write_text('{"provider":"infisical","project":"p","path":"/","key":"k"}')
+
+        mock_provider = MagicMock()
+        mock_provider.lookup.side_effect = ProviderError("Auth failed", provider_name="infisical")
+
+        from unittest.mock import patch
+
+        with patch("psi.secret.get_provider", return_value=mock_provider):
+            with pytest.raises(SystemExit) as exc_info:
+                lookup(_mock_settings(tmp_path))
+
+        assert exc_info.value.code == 1
+        assert "Auth failed" in capsys.readouterr().err
 
 
 class TestRequireSecretId:

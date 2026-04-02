@@ -11,6 +11,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, NoReturn
 
+from psi.errors import PsiError
 from psi.provider import get_provider, parse_mapping
 
 if TYPE_CHECKING:
@@ -29,27 +30,32 @@ def store(settings: PsiSettings) -> None:
 
 def lookup(settings: PsiSettings) -> None:
     """Fetch a secret value via the appropriate provider."""
-    secret_id = _require_secret_id()
-    mapping_path = settings.state_dir / secret_id
-
-    if not mapping_path.exists():
-        _fail(f"No mapping for secret: {secret_id}")
-
-    raw = mapping_path.read_text().strip()
     try:
-        mapping_data = parse_mapping(raw)
-    except ValueError as e:
-        _fail(f"Corrupt mapping for {secret_id}: {e}")
+        secret_id = _require_secret_id()
+        mapping_path = settings.state_dir / secret_id
 
-    provider_name = mapping_data["provider"]
-    provider = get_provider(provider_name, settings)
-    provider.open()
-    try:
-        value = provider.lookup(mapping_data)
-    finally:
-        provider.close()
+        if not mapping_path.exists():
+            _fail(f"No mapping for secret: {secret_id}")
 
-    sys.stdout.buffer.write(value)
+        raw = mapping_path.read_text().strip()
+        try:
+            mapping_data = parse_mapping(raw)
+        except ValueError as e:
+            _fail(f"Corrupt mapping for {secret_id}: {e}")
+
+        provider_name = mapping_data["provider"]
+        provider = get_provider(provider_name, settings)
+        provider.open()
+        try:
+            value = provider.lookup(mapping_data)
+        finally:
+            provider.close()
+
+        sys.stdout.buffer.write(value)
+    except SystemExit, KeyboardInterrupt:
+        raise
+    except PsiError as e:
+        _fail(str(e))
 
 
 def delete(settings: PsiSettings) -> None:

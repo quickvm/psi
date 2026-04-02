@@ -35,17 +35,25 @@ class PKCS11Session:
 
     def open(self, pin: str) -> None:
         """Open a session and log in with the provided PIN."""
+        from PyKCS11 import PyKCS11Error
+
+        from psi.errors import ProviderError
+
         self._lib = PyKCS11Lib()
         self._lib.load(self._config.pkcs11_module)
         slots = self._lib.getSlotList(tokenPresent=True)
         if self._config.slot >= len(slots):
             msg = f"Slot {self._config.slot} not found. Available: {len(slots)} slots"
-            raise RuntimeError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
         self._session = self._lib.openSession(
             slots[self._config.slot],
             CKF_SERIAL_SESSION | CKF_RW_SESSION,
         )
-        self._session.login(pin, CKU_USER)
+        try:
+            self._session.login(pin, CKU_USER)
+        except PyKCS11Error as e:
+            msg = f"HSM login failed: {e}. Check your PIN."
+            raise ProviderError(msg, provider_name="nitrokeyhsm") from e
 
     def close(self) -> None:
         """Log out and close the session."""
@@ -61,20 +69,30 @@ class PKCS11Session:
 
     def decrypt_rsa_oaep(self, ciphertext: bytes) -> bytes:
         """Decrypt data using the HSM's RSA private key with OAEP-SHA256."""
+        from PyKCS11 import PyKCS11Error
+
+        from psi.errors import ProviderError
+
         if not self._session:
             msg = "PKCS#11 session not open"
-            raise RuntimeError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
         key = self._find_private_key()
         mechanism = RSAOAEPMechanism(CKM_SHA256, CKG_MGF1_SHA256)
-        result = self._session.decrypt(key, ciphertext, mechanism)
+        try:
+            result = self._session.decrypt(key, ciphertext, mechanism)
+        except PyKCS11Error as e:
+            msg = f"HSM decryption failed: {e}"
+            raise ProviderError(msg, provider_name="nitrokeyhsm") from e
         return bytes(result)
 
     def get_public_key_der(self) -> bytes:
         """Extract the RSA public key in DER format from the HSM."""
+        from psi.errors import ProviderError
+
         if not self._session:
             msg = "PKCS#11 session not open"
-            raise RuntimeError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
         key_id = bytes.fromhex(self._config.key_id)
         template = [
@@ -89,11 +107,13 @@ class PKCS11Session:
             ]
             objects = self._session.findObjects(template)
         if not objects:
+            from psi.errors import ProviderError
+
             msg = (
                 f"Public key not found: label={self._config.key_label!r}, "
                 f"id={self._config.key_id!r}"
             )
-            raise RuntimeError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
         from PyKCS11 import CKA_MODULUS, CKA_PUBLIC_EXPONENT
 
@@ -121,11 +141,13 @@ class PKCS11Session:
             ]
             objects = self._session.findObjects(template)
         if not objects:
+            from psi.errors import ProviderError
+
             msg = (
                 f"Private key not found: label={self._config.key_label!r}, "
                 f"id={self._config.key_id!r}"
             )
-            raise RuntimeError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
         return objects[0]
 
 

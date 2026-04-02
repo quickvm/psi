@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import UnixStreamServer
 from typing import TYPE_CHECKING
 
+from psi.errors import PsiError
 from psi.provider import close_all_providers, open_all_providers, parse_mapping
 
 if TYPE_CHECKING:
@@ -92,35 +94,38 @@ def _make_handler(
 
         def _handle_lookup(self, secret_id: str) -> None:
             if not secret_id:
-                self._respond(400, b"SECRET_ID not set")
+                self._respond_error(400, "missing_secret_id", "SECRET_ID not set")
                 return
 
             mapping_path = settings.state_dir / secret_id
             if not mapping_path.exists():
-                self._respond(404, f"no mapping: {secret_id}".encode())
+                self._respond_error(404, "not_found", f"No mapping for secret: {secret_id}")
                 return
 
             raw = mapping_path.read_text().strip()
             try:
                 mapping_data = parse_mapping(raw)
             except ValueError:
-                self._respond(500, f"corrupt mapping: {secret_id}".encode())
+                self._respond_error(500, "corrupt_mapping", f"Corrupt mapping for {secret_id}")
                 return
 
             provider_name = mapping_data.get("provider", "")
             provider = providers.get(provider_name)
             if not provider:
-                self._respond(
+                self._respond_error(
                     500,
-                    f"unknown provider: {provider_name}".encode(),
+                    "unknown_provider",
+                    f"Provider '{provider_name}' not configured",
                 )
                 return
 
             try:
                 value = provider.lookup(mapping_data)
                 self._respond(200, value)
+            except PsiError as e:
+                self._respond_error(502, "provider_error", str(e))
             except Exception as e:
-                self._respond(502, str(e).encode())
+                self._respond_error(502, "internal_error", str(e))
 
         def _handle_store(self, secret_id: str) -> None:
             if not secret_id:
@@ -159,6 +164,14 @@ def _make_handler(
 
         def _respond(self, code: int, body: bytes) -> None:
             self.send_response(code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _respond_error(self, code: int, error: str, detail: str) -> None:
+            body = json.dumps({"error": error, "detail": detail}).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

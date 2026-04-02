@@ -32,13 +32,20 @@ class NitrokeyHSMProvider:
 
     def open(self) -> None:
         """Open PKCS#11 session, log in, and cache the public key."""
+        from psi.errors import ProviderError
         from psi.providers.nitrokeyhsm.pin import resolve_pin
         from psi.providers.nitrokeyhsm.pkcs11 import PKCS11Session
 
-        pin = resolve_pin(self.config)
-        self._session = PKCS11Session(self.config)
-        self._session.open(pin)
-        self._public_key_der = self._load_public_key()
+        try:
+            pin = resolve_pin(self.config)
+            self._session = PKCS11Session(self.config)
+            self._session.open(pin)
+            self._public_key_der = self._load_public_key()
+        except ProviderError:
+            raise
+        except Exception as e:
+            msg = f"Failed to open HSM session: {e}"
+            raise ProviderError(msg, provider_name="nitrokeyhsm") from e
 
     def close(self) -> None:
         """Close the PKCS#11 session."""
@@ -55,19 +62,26 @@ class NitrokeyHSMProvider:
         Returns:
             Decrypted plaintext bytes.
         """
+        from psi.errors import ProviderError
         from psi.providers.nitrokeyhsm.crypto import decrypt
 
         if not self._session:
-            msg = "NitrokeyHSMProvider not open"
-            raise RuntimeError(msg)
+            msg = "Nitrokey HSM provider is not initialized"
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
         blob_b64 = mapping_data.get("blob")
         if not blob_b64:
             msg = "Nitrokey HSM mapping missing 'blob' field"
-            raise ValueError(msg)
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
-        envelope = base64.b64decode(blob_b64)
-        return decrypt(envelope, self._session)
+        try:
+            envelope = base64.b64decode(blob_b64)
+            return decrypt(envelope, self._session)
+        except ProviderError:
+            raise
+        except Exception as e:
+            msg = f"HSM decryption failed: {e}"
+            raise ProviderError(msg, provider_name="nitrokeyhsm") from e
 
     def store(self, secret_id: str, plaintext: bytes) -> None:
         """Encrypt plaintext and write as a JSON mapping to state_dir.
@@ -76,11 +90,12 @@ class NitrokeyHSMProvider:
             secret_id: The Podman secret ID.
             plaintext: Secret value to encrypt.
         """
+        from psi.errors import ProviderError
         from psi.providers.nitrokeyhsm.crypto import encrypt
 
         if not self._public_key_der:
-            msg = "NitrokeyHSMProvider not open (no public key)"
-            raise RuntimeError(msg)
+            msg = "Nitrokey HSM provider is not initialized (no public key)"
+            raise ProviderError(msg, provider_name="nitrokeyhsm")
 
         envelope = encrypt(plaintext, self._public_key_der)
         mapping = json.dumps(
