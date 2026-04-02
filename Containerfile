@@ -34,6 +34,7 @@ RUN dnf install -y \
         python3.14 \
         dbus-libs \
         glib2 \
+        jq \
         opensc \
         pcsc-lite-libs \
     && dnf clean all
