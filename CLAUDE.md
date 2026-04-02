@@ -169,6 +169,12 @@ workloads:
       - project: myproject
         path: /myapp
         # recursive: true       # set to include secrets from subfolders (default: false)
+  # Template unit — name ends with @, drop-in applies to all instances
+  windmill-worker@:
+    provider: infisical
+    secrets:
+      - project: homelab
+        path: /windmill
   infisical:
     provider: nitrokeyhsm
 ```

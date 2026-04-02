@@ -218,6 +218,57 @@ To pull an entire folder tree into a single workload:
         recursive: true          # includes /myapp, /myapp/db, /myapp/cache, etc.
 ```
 
+### Template units
+
+Workload names ending with `@` are systemd template units. PSI registers secrets and generates a
+single template-level drop-in that all instances inherit.
+
+```yaml
+workloads:
+  windmill-worker@:
+    provider: infisical
+    depends_on: [psi-secrets-setup.service]
+    secrets:
+      - project: homelab
+        path: /windmill
+      - project: homelab
+        path: /windmill/worker
+```
+
+This creates:
+- Podman secrets: `windmill-worker@--DB_HOST`, `windmill-worker@--MODE`, etc.
+- Drop-in: `windmill-worker@.container.d/50-secrets.conf`
+
+All instances (`windmill-worker@1`, `windmill-worker@2`, ...) share the same secrets. Start as
+many instances as needed — PSI doesn't need to know the instance names.
+
+```bash
+systemctl start windmill-worker@1.service
+systemctl start windmill-worker@2.service
+systemctl start windmill-worker@3.service
+```
+
+Template and regular workloads can coexist:
+
+```yaml
+workloads:
+  windmill-server:
+    provider: infisical
+    secrets:
+      - project: homelab
+        path: /windmill
+      - project: homelab
+        path: /windmill/server
+
+  windmill-worker@:
+    provider: infisical
+    secrets:
+      - project: homelab
+        path: /windmill
+      - project: homelab
+        path: /windmill/worker
+```
+
 ### Workload dependencies
 
 `depends_on` adds systemd ordering to generated drop-ins. Each entry becomes `After=` and `Wants=`
