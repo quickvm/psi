@@ -61,7 +61,7 @@ def open_all_providers(settings: PsiSettings) -> dict[str, SecretProvider]:
     Providers that fail to open are skipped with a warning — they
     may not be needed for the secrets currently registered.
     """
-    import sys
+    from loguru import logger
 
     providers: dict[str, SecretProvider] = {}
     for name in settings.providers:
@@ -69,11 +69,18 @@ def open_all_providers(settings: PsiSettings) -> dict[str, SecretProvider]:
         try:
             provider.open()
             providers[name] = provider
+            logger.bind(
+                event="provider.open",
+                provider=name,
+                outcome="success",
+            ).info("provider opened")
         except Exception as e:
-            print(
-                f"Warning: provider '{name}' failed to open: {e}",
-                file=sys.stderr,
-            )
+            logger.bind(
+                event="provider.open",
+                provider=name,
+                outcome="error",
+                error=str(e),
+            ).warning("provider '{}' failed to open: {}", name, e)
     return providers
 
 

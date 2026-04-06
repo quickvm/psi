@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -151,6 +152,88 @@ class TestLookupProviderError:
 
         assert exc_info.value.code == 1
         assert "Auth failed" in capsys.readouterr().err
+
+
+class TestAuditLogging:
+    def test_lookup_logs_audit_event(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import io
+
+        from loguru import logger
+
+        from psi.secret import lookup
+
+        monkeypatch.setenv("SECRET_ID", "myapp--DB_HOST")
+        mapping = tmp_path / "myapp--DB_HOST"
+        mapping.write_text('{"provider":"infisical","project":"p","path":"/","key":"k"}')
+
+        mock_provider = MagicMock()
+        mock_provider.lookup.return_value = b"the-value"
+
+        sink = io.StringIO()
+        logger.remove()
+        handler_id = logger.add(sink, serialize=True, level="INFO")
+
+        try:
+            from unittest.mock import patch
+
+            with patch("psi.secret.get_provider", return_value=mock_provider):
+                lookup(_mock_settings(tmp_path))
+        finally:
+            logger.remove(handler_id)
+
+        records = [json.loads(line) for line in sink.getvalue().strip().split("\n")]
+        events = [r["record"]["extra"] for r in records]
+        lookup_events = [e for e in events if e.get("event") == "secret.lookup"]
+        assert len(lookup_events) == 1
+        assert lookup_events[0]["outcome"] == "success"
+        assert lookup_events[0]["secret_id"] == "myapp--DB_HOST"
+        assert lookup_events[0]["provider"] == "infisical"
+
+        full_output = sink.getvalue()
+        assert "the-value" not in full_output
+
+    def test_lookup_error_logs_audit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import io
+
+        from loguru import logger
+
+        from psi.secret import lookup
+
+        monkeypatch.setenv("SECRET_ID", "myapp--DB_HOST")
+        mapping = tmp_path / "myapp--DB_HOST"
+        mapping.write_text('{"provider":"infisical","project":"p","path":"/","key":"k"}')
+
+        mock_provider = MagicMock()
+        mock_provider.lookup.side_effect = ProviderError("Auth failed", provider_name="infisical")
+
+        sink = io.StringIO()
+        logger.remove()
+        handler_id = logger.add(sink, serialize=True, level="INFO")
+
+        try:
+            from unittest.mock import patch
+
+            with patch("psi.secret.get_provider", return_value=mock_provider):
+                with pytest.raises(SystemExit):
+                    lookup(_mock_settings(tmp_path))
+        finally:
+            logger.remove(handler_id)
+
+        records = [json.loads(line) for line in sink.getvalue().strip().split("\n")]
+        events = [r["record"]["extra"] for r in records]
+        lookup_events = [e for e in events if e.get("event") == "secret.lookup"]
+        assert len(lookup_events) == 1
+        assert lookup_events[0]["outcome"] == "error"
+        assert lookup_events[0]["error"] == "Auth failed"
 
 
 class TestRequireSecretId:
