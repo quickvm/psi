@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from psi.files import write_text_secure
 from psi.providers.infisical.models import AuthConfig, TokenCache
 
 if TYPE_CHECKING:
@@ -41,5 +42,4 @@ def write_token_cache(
         expires_at=time.time() + effective_ttl,
     )
     path = _cache_path(state_dir, auth)
-    path.write_text(cache.model_dump_json())
-    path.chmod(0o600)
+    write_text_secure(path, cache.model_dump_json())

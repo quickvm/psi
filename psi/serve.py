@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from psi.errors import PsiError
+from psi.files import write_bytes_secure
 from psi.provider import close_all_providers, open_all_providers, parse_mapping
 from psi.secret import validate_secret_id
 from psi.token import resolve_socket_token
@@ -196,8 +197,7 @@ def _make_handler(
 
             settings.state_dir.mkdir(parents=True, exist_ok=True)
             mapping_path = settings.state_dir / secret_id
-            mapping_path.write_bytes(data)
-            mapping_path.chmod(0o600)
+            write_bytes_secure(mapping_path, data)
             logger.bind(
                 event="secret.store",
                 secret_id=secret_id,

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.console import Console
 
+from psi.files import write_bytes_secure, write_text_secure
 from psi.models import detect_scope
 from psi.settings import load_settings
 
@@ -191,11 +192,11 @@ def write_file(
         client.close()
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    file_mode = int(mode, 8)
     if base64_decode:
-        output.write_bytes(base64.b64decode(value))
+        write_bytes_secure(output, base64.b64decode(value), mode=file_mode)
     else:
-        output.write_text(value)
-    output.chmod(int(mode, 8))
+        write_text_secure(output, value, mode=file_mode)
     console.print(f"[green]Wrote {output}[/green]")
 
 
