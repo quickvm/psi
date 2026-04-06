@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import httpx
 from rich.console import Console
 
+from psi.errors import ProviderError
 from psi.models import SystemdScope
 
 if TYPE_CHECKING:
@@ -67,19 +68,27 @@ def _setup_infisical_workload(
             project = infisical_config.projects[source.project]
             auth = resolve_auth(project, infisical_config)
             assert provider._client is not None
-            token = provider._client.ensure_token(auth)
+            try:
+                token = provider._client.ensure_token(auth)
+            except httpx.ConnectError as e:
+                msg = f"Cannot reach Infisical API at {infisical_config.api_url}: {e}"
+                raise ProviderError(msg, provider_name="infisical") from e
 
             console.print(
                 f"  Fetching [cyan]{source.project}[/cyan] path=[cyan]{source.path}[/cyan]"
             )
 
-            secrets = provider._client.list_secrets(
-                token,
-                project.id,
-                project.environment,
-                source.path,
-                recursive=source.recursive,
-            )
+            try:
+                secrets = provider._client.list_secrets(
+                    token,
+                    project.id,
+                    project.environment,
+                    source.path,
+                    recursive=source.recursive,
+                )
+            except httpx.ConnectError as e:
+                msg = f"Cannot reach Infisical API at {infisical_config.api_url}: {e}"
+                raise ProviderError(msg, provider_name="infisical") from e
 
             for secret in secrets:
                 key = secret["secretKey"]

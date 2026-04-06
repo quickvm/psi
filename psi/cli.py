@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 
+from psi.errors import PsiError
 from psi.models import detect_scope
 from psi.settings import load_settings
 
@@ -155,4 +157,38 @@ def systemd_install(
 
 def main() -> None:
     """Entry point for the psi CLI."""
-    app()
+    try:
+        app()
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+    except PsiError as e:
+        _print_error(str(e))
+        raise SystemExit(1) from e
+    except ValidationError as e:
+        _print_validation_error(e)
+        raise SystemExit(1) from e
+    except Exception as e:
+        _print_bug()
+        raise SystemExit(2) from e
+
+
+def _print_error(message: str) -> None:
+    console.print(f"[red]Error:[/red] {message}", highlight=False)
+
+
+def _print_validation_error(exc: ValidationError) -> None:
+    lines = ["Configuration error:"]
+    for err in exc.errors():
+        loc = " → ".join(str(p) for p in err["loc"])
+        lines.append(f"  - {loc}: {err['msg']}")
+    console.print("\n".join(lines), style="red", highlight=False)
+
+
+def _print_bug() -> None:
+    console.print(
+        "[red]Internal error — this is a bug.[/red]\n"
+        "Please report it at "
+        "https://github.com/quickvm/psi/issues\n",
+        highlight=False,
+    )
+    console.print_exception()

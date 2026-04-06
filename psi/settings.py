@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import ValidationError, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -13,6 +13,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+from psi.errors import ConfigError
 from psi.models import SystemdScope, WorkloadConfig
 
 _SYSTEM_CONFIG = Path("/etc/psi/config.yaml")
@@ -87,7 +88,7 @@ class PsiSettings(BaseSettings):
                     f"'{workload.provider}', but it is not configured. "
                     f"Available: {available}"
                 )
-                raise ValueError(msg)
+                raise ConfigError(msg)
         return self
 
 
@@ -105,4 +106,21 @@ def load_settings(
             env_prefix="PSI_",
         )
 
-    return _Settings(scope=scope)
+    yaml_path = Path(yaml_file)
+    if not yaml_path.exists():
+        msg = f"Config file not found: {yaml_path}"
+        raise ConfigError(msg)
+
+    try:
+        return _Settings(scope=scope)
+    except ValidationError as e:
+        lines = [f"Configuration error in {yaml_path}:"]
+        for err in e.errors():
+            loc = " → ".join(str(p) for p in err["loc"])
+            lines.append(f"  - {loc}: {err['msg']}")
+        raise ConfigError("\n".join(lines)) from e
+    except Exception as e:
+        if "yaml" in type(e).__module__.lower():
+            msg = f"Invalid YAML in {yaml_path}: {e}"
+            raise ConfigError(msg) from e
+        raise

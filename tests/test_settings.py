@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from psi.errors import ConfigError
 from psi.models import SystemdScope
 from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 from psi.settings import default_config_path, load_settings
@@ -59,6 +60,13 @@ class TestLoadSettings:
         assert settings.providers == {}
 
 
+class TestConfigFileNotFound:
+    def test_missing_config_raises_config_error(self, tmp_path: Path) -> None:
+        missing = tmp_path / "nonexistent.yaml"
+        with pytest.raises(ConfigError, match="Config file not found"):
+            load_settings(missing)
+
+
 class TestWorkloadProviderValidation:
     def test_invalid_workload_provider(self, tmp_path: Path) -> None:
         config = {
@@ -71,7 +79,7 @@ class TestWorkloadProviderValidation:
             },
         }
         config_file = _write_config(tmp_path, config)
-        with pytest.raises(Exception, match="nonexistent"):
+        with pytest.raises(ConfigError, match="nonexistent"):
             load_settings(config_file)
 
     def test_valid_provider_reference(self, tmp_path: Path) -> None:
