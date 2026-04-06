@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from rich.console import Console
 
 from psi.errors import PsiError
+from psi.logging import configure_logging
 from psi.models import detect_scope
 from psi.settings import load_settings
 
@@ -55,6 +56,29 @@ JsonOption = Annotated[
     bool,
     typer.Option("--json", help="Force JSON output."),
 ]
+
+
+@app.callback()
+def _configure(
+    log_level: Annotated[
+        str,
+        typer.Option(
+            "--log-level",
+            envvar="PSI_LOG_LEVEL",
+            help="Log level: DEBUG, INFO, WARNING, ERROR.",
+        ),
+    ] = "INFO",
+    log_json: Annotated[
+        bool,
+        typer.Option(
+            "--log-json",
+            envvar="PSI_LOG_JSON",
+            help="Force JSON log output (default: auto-detect from TTY).",
+        ),
+    ] = False,
+) -> None:
+    """Configure logging before any subcommand runs."""
+    configure_logging(level=log_level, json_output=log_json or None)
 
 
 # --- Top-level commands ---
@@ -149,12 +173,14 @@ def systemd_install(
     config: ConfigOption = None,
 ) -> None:
     """Generate systemd units for psi services."""
+    from loguru import logger
+
     from psi.installer import install_systemd_units
     from psi.models import DeployMode
 
     deploy_mode = DeployMode(mode)
     if deploy_mode == DeployMode.CONTAINER and not image:
-        console.print("[red]Container mode requires --image.[/red]")
+        logger.error("Container mode requires --image.")
         raise typer.Exit(1)
 
     settings = load_settings(config, scope=detect_scope())

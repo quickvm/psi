@@ -11,6 +11,8 @@ import os
 import sys
 from typing import TYPE_CHECKING, NoReturn
 
+from loguru import logger
+
 from psi.errors import PsiError
 from psi.provider import get_provider, parse_mapping
 
@@ -26,10 +28,17 @@ def store(settings: PsiSettings) -> None:
     mapping_path = settings.state_dir / secret_id
     mapping_path.write_bytes(mapping_data)
     mapping_path.chmod(0o600)
+    logger.bind(
+        event="secret.store",
+        secret_id=secret_id,
+        outcome="success",
+    ).info("store")
 
 
 def lookup(settings: PsiSettings) -> None:
     """Fetch a secret value via the appropriate provider."""
+    secret_id = ""
+    provider_name = ""
     try:
         secret_id = _require_secret_id()
         mapping_path = settings.state_dir / secret_id
@@ -52,9 +61,22 @@ def lookup(settings: PsiSettings) -> None:
             provider.close()
 
         sys.stdout.buffer.write(value)
+        logger.bind(
+            event="secret.lookup",
+            secret_id=secret_id,
+            provider=provider_name,
+            outcome="success",
+        ).info("lookup")
     except SystemExit, KeyboardInterrupt:
         raise
     except PsiError as e:
+        logger.bind(
+            event="secret.lookup",
+            secret_id=secret_id,
+            provider=provider_name,
+            outcome="error",
+            error=str(e),
+        ).warning("lookup")
         _fail(str(e))
 
 
@@ -63,6 +85,11 @@ def delete(settings: PsiSettings) -> None:
     secret_id = _require_secret_id()
     mapping_path = settings.state_dir / secret_id
     mapping_path.unlink(missing_ok=True)
+    logger.bind(
+        event="secret.delete",
+        secret_id=secret_id,
+        outcome="success",
+    ).info("delete")
 
 
 def list_secrets(settings: PsiSettings) -> None:

@@ -8,15 +8,13 @@ import time
 from typing import TYPE_CHECKING
 
 import httpx
-from rich.console import Console
+from loguru import logger
 
 from psi.errors import ProviderError
 from psi.models import SystemdScope
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
-
-console = Console()
 
 _PODMAN_API_VERSION = "v5.0.0"
 
@@ -47,20 +45,18 @@ def run_setup(
         if provider and workload.provider != provider:
             continue
 
-        console.print(f"\n[bold]Workload: {workload_name}[/bold]")
+        logger.info("Workload: {}", workload_name)
 
         if workload.provider == "infisical":
             _setup_infisical_workload(settings, workload_name)
         elif workload.provider == "nitrokeyhsm":
-            console.print(
-                "  [dim]Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'[/dim]"
-            )
+            logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
         else:
-            console.print(f"  [yellow]Unknown provider '{workload.provider}', skipping[/yellow]")
+            logger.warning("Unknown provider '{}', skipping", workload.provider)
 
-    console.print("\n[bold]Reloading systemd...[/bold]")
+    logger.info("Reloading systemd...")
     _systemd_daemon_reload(settings.scope)
-    console.print("[green]Setup complete.[/green]")
+    logger.info("Setup complete.")
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -90,9 +86,11 @@ def _setup_infisical_workload(
             last_exc = e
             if attempt < len(_RETRY_DELAYS):
                 delay = _RETRY_DELAYS[attempt]
-                console.print(
-                    f"  [yellow]Infisical unavailable, retrying in {delay}s "
-                    f"(attempt {attempt + 1}/{len(_RETRY_DELAYS)})[/yellow]"
+                logger.warning(
+                    "Infisical unavailable, retrying in {}s (attempt {}/{})",
+                    delay,
+                    attempt + 1,
+                    len(_RETRY_DELAYS),
                 )
                 time.sleep(delay)
     assert last_exc is not None
@@ -120,8 +118,10 @@ def _fetch_and_register_infisical(
             assert provider._client is not None
             token = provider._client.ensure_token(auth)
 
-            console.print(
-                f"  Fetching [cyan]{source.project}[/cyan] path=[cyan]{source.path}[/cyan]"
+            logger.info(
+                "Fetching project={} path={}",
+                source.project,
+                source.path,
             )
 
             secrets = provider._client.list_secrets(
@@ -141,9 +141,9 @@ def _fetch_and_register_infisical(
                     key,
                 )
 
-            console.print(f"    Found {len(secrets)} secrets")
+            logger.info("Found {} secrets", len(secrets))
 
-        console.print(f"  [green]Merged: {len(merged)} unique secrets[/green]")
+        logger.info("Merged: {} unique secrets", len(merged))
         _register_secrets(settings, workload_name, merged)
         _generate_drop_in(settings, workload_name, merged)
     finally:
@@ -193,7 +193,7 @@ def _register_secrets(
             )
             resp.raise_for_status()
 
-    console.print(f"  Registered {len(secrets)} secrets with Podman")
+    logger.info("Registered {} secrets with Podman", len(secrets))
 
 
 def _generate_drop_in(
@@ -222,4 +222,4 @@ def _generate_drop_in(
         lines.append(f"Secret={podman_name},type=env,target={secret_name}")
 
     drop_in_path.write_text("\n".join(lines) + "\n")
-    console.print(f"  Wrote drop-in: {drop_in_path}")
+    logger.info("Wrote drop-in: {}", drop_in_path)

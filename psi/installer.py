@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rich.console import Console
+from loguru import logger
 
 from psi.models import DeployMode, SystemdScope
 from psi.unitgen import (
@@ -29,9 +29,6 @@ def _has_tls(settings: PsiSettings) -> bool:
     """Check if TLS is configured in the Infisical provider."""
     inf_raw = settings.providers.get("infisical", {})
     return bool(inf_raw.get("tls"))
-
-
-console = Console()
 
 
 def _systemd_unit_dir(scope: SystemdScope) -> Path:
@@ -69,7 +66,7 @@ def install_driver_conf(settings: PsiSettings) -> None:
     conf_path = conf_dir / "psi.conf"
     conf_path.write_text(generate_driver_conf(settings.scope))
     _ensure_dir(settings.state_dir)
-    console.print(f"[green]Wrote {conf_path}[/green]")
+    logger.info("Wrote {}", conf_path)
 
 
 def _install_native(settings: PsiSettings, enable: bool) -> None:
@@ -192,7 +189,7 @@ def _write_unit(path: Path, content: str) -> None:
     """Write a unit file and log it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
-    console.print(f"  Wrote {path}")
+    logger.info("Wrote {}", path)
 
 
 def _ensure_dir(path: Path) -> None:
@@ -200,7 +197,7 @@ def _ensure_dir(path: Path) -> None:
     existed = path.exists()
     path.mkdir(parents=True, exist_ok=True)
     if not existed:
-        console.print(f"[green]Created {path}[/green]")
+        logger.info("Created {}", path)
 
 
 def _daemon_reload(scope: SystemdScope) -> None:
@@ -210,7 +207,7 @@ def _daemon_reload(scope: SystemdScope) -> None:
         cmd.append("--user")
     cmd.append("daemon-reload")
     subprocess.run(cmd, check=True)
-    console.print("[green]Reloaded systemd.[/green]")
+    logger.info("Reloaded systemd.")
 
 
 def _enable_units(
@@ -225,14 +222,14 @@ def _enable_units(
 
     for unit in base_units:
         subprocess.run([*cmd_prefix, "enable", "--now", unit], check=True)
-        console.print(f"  Enabled {unit}")
+        logger.info("Enabled {}", unit)
 
     if has_tls:
         subprocess.run(
             [*cmd_prefix, "enable", "--now", "psi-tls-renew.timer"],
             check=True,
         )
-        console.print("  Enabled psi-tls-renew.timer")
+        logger.info("Enabled psi-tls-renew.timer")
 
 
 def _find_psi_path() -> str:

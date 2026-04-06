@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import UnixStreamServer
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from psi.errors import PsiError
 from psi.provider import close_all_providers, open_all_providers, parse_mapping
@@ -37,7 +38,7 @@ def run_serve(settings: PsiSettings, socket_path: str) -> None:
         server = _UnixHTTPServer(socket_path, handler)
         os.chmod(socket_path, 0o600)
 
-        print(f"Listening on {socket_path}", file=sys.stderr)
+        logger.info("Listening on {}", socket_path)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
@@ -119,12 +120,20 @@ def _make_handler(
                 )
                 return
 
+            audit = logger.bind(
+                event="secret.lookup",
+                secret_id=secret_id,
+                provider=provider_name,
+            )
             try:
                 value = provider.lookup(mapping_data)
                 self._respond(200, value)
+                audit.bind(outcome="success").info("lookup")
             except PsiError as e:
+                audit.bind(outcome="error", error=str(e)).warning("lookup")
                 self._respond_error(502, "provider_error", str(e))
             except Exception as e:
+                audit.bind(outcome="error", error=str(e)).error("lookup")
                 self._respond_error(502, "internal_error", str(e))
 
         def _handle_store(self, secret_id: str) -> None:
@@ -139,6 +148,11 @@ def _make_handler(
             mapping_path = settings.state_dir / secret_id
             mapping_path.write_bytes(data)
             mapping_path.chmod(0o600)
+            logger.bind(
+                event="secret.store",
+                secret_id=secret_id,
+                outcome="success",
+            ).info("store")
             self._respond(200, b"ok")
 
         def _handle_delete(self, secret_id: str) -> None:
@@ -148,6 +162,11 @@ def _make_handler(
 
             mapping_path = settings.state_dir / secret_id
             mapping_path.unlink(missing_ok=True)
+            logger.bind(
+                event="secret.delete",
+                secret_id=secret_id,
+                outcome="success",
+            ).info("delete")
             self._respond(200, b"ok")
 
         def _handle_list(self) -> None:
