@@ -162,6 +162,19 @@ class TestDriverConfGenerator:
         assert "psi.sock" in content
         assert "/lookup" in content
 
+    def test_no_auth_header_without_token(self) -> None:
+        content = generate_driver_conf(SystemdScope.SYSTEM)
+        assert "Authorization" not in content
+
+    def test_auth_header_with_token(self) -> None:
+        content = generate_driver_conf(SystemdScope.SYSTEM, token="mytoken12345")
+        assert "-H 'Authorization: Bearer mytoken12345'" in content
+        # Still has all four command lines
+        assert "/lookup" in content
+        assert "/store" in content
+        assert "/delete" in content
+        assert "/list" in content
+
 
 class TestCollectTlsVolumeDirs:
     def test_no_tls(self, tmp_path: Path) -> None:

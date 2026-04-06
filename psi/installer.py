@@ -61,10 +61,15 @@ def install_systemd_units(
 
 def install_driver_conf(settings: PsiSettings) -> None:
     """Generate and install the Podman shell driver config."""
+    from psi.token import resolve_socket_token
+
     conf_dir = _containers_conf_dir(settings.scope)
     _ensure_dir(conf_dir)
     conf_path = conf_dir / "psi.conf"
-    conf_path.write_text(generate_driver_conf(settings.scope))
+    token = resolve_socket_token(settings)
+    conf_path.write_text(generate_driver_conf(settings.scope, token=token))
+    if token:
+        conf_path.chmod(0o600)
     _ensure_dir(settings.state_dir)
     logger.info("Wrote {}", conf_path)
 

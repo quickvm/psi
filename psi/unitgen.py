@@ -168,16 +168,23 @@ def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> s
     return "\n".join(lines) + "\n"
 
 
-def generate_driver_conf(scope: SystemdScope) -> str:
+def generate_driver_conf(scope: SystemdScope, token: str | None = None) -> str:
     """Generate containers.conf.d/psi.conf using the PSI serve socket.
 
     Works for both native and container modes — the driver conf just
     talks to the local socket. The PSI serve process handles the rest.
+
+    Args:
+        scope: System or user systemd scope (determines socket path).
+        token: Optional socket auth token. When set, curl commands include
+            an Authorization header. The token is validated elsewhere, so
+            it is safe to embed literally in the generated config.
     """
     from psi.models import socket_path
 
     sock = socket_path(scope)
-    curl = f"curl -sf --unix-socket {sock}"
+    auth = f" -H 'Authorization: Bearer {token}'" if token else ""
+    curl = f"curl -sf{auth} --unix-socket {sock}"
     secret_id = "$SECRET_ID"
     return (
         "[secrets]\n"
