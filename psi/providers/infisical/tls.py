@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 from rich.table import Table
 
+from psi.files import write_text_secure
 from psi.providers.infisical.api import InfisicalClient
 from psi.providers.infisical.models import (
     CertState,
@@ -260,13 +261,9 @@ def _write_cert_files(cert_config: CertificateConfig, cert_data: dict[str, Any])
         files.append((output.ca, cert_data["issuingCaCertificate"]))
 
     for path, content in files:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
-        path.chmod(mode)
+        file_mode = 0o600 if path == output.key else mode
+        write_text_secure(path, content, mode=file_mode)
         console.print(f"  Wrote {path}")
-
-    # Key file gets stricter permissions
-    output.key.chmod(0o600)
 
 
 def _run_hooks(hooks: list[str], cert_name: str) -> bool:

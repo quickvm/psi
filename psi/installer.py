@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from psi.files import write_text_secure
 from psi.models import DeployMode, SystemdScope
 from psi.unitgen import (
     generate_container_provider_setup_quadlet,
@@ -67,9 +68,12 @@ def install_driver_conf(settings: PsiSettings) -> None:
     _ensure_dir(conf_dir)
     conf_path = conf_dir / "psi.conf"
     token = resolve_socket_token(settings)
-    conf_path.write_text(generate_driver_conf(settings.scope, token=token))
-    if token:
-        conf_path.chmod(0o600)
+    mode = 0o600 if token else 0o644
+    write_text_secure(
+        conf_path,
+        generate_driver_conf(settings.scope, token=token),
+        mode=mode,
+    )
     _ensure_dir(settings.state_dir)
     logger.info("Wrote {}", conf_path)
 

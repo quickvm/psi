@@ -117,6 +117,17 @@ class TestWriteCertFiles:
         _write_cert_files(cert_config, cert_data)
         assert oct(cert_config.output.key.stat().st_mode & 0o777) == "0o600"
 
+    def test_non_key_files_use_configured_mode(self, tmp_path: Path, tls_config) -> None:
+        cert_config = tls_config.certificates["web"]
+        cert_data = {
+            "certificate": "c",
+            "privateKey": "k",
+            "certificateChain": "ch",
+        }
+        _write_cert_files(cert_config, cert_data)
+        assert oct(cert_config.output.cert.stat().st_mode & 0o777) == "0o640"
+        assert oct(cert_config.output.chain.stat().st_mode & 0o777) == "0o640"
+
     def test_writes_ca_when_configured(self, tmp_path: Path) -> None:
         from psi.providers.infisical.models import CertificateConfig, CertOutput
 

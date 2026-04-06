@@ -73,6 +73,25 @@ class TestInstallDriverConf:
 
         assert state_dir.exists()
 
+    def test_uses_restrictive_mode_when_token_present(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "containers.conf.d"
+        with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
+            settings = _mock_settings(tmp_path)
+            settings.socket_token = "mytoken12345"
+            install_driver_conf(settings)
+
+        conf_path = conf_dir / "psi.conf"
+        assert oct(conf_path.stat().st_mode & 0o777) == "0o600"
+
+    def test_uses_default_mode_without_token(self, tmp_path: Path) -> None:
+        conf_dir = tmp_path / "containers.conf.d"
+        with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
+            settings = _mock_settings(tmp_path)
+            install_driver_conf(settings)
+
+        conf_path = conf_dir / "psi.conf"
+        assert oct(conf_path.stat().st_mode & 0o777) == "0o644"
+
 
 class TestScopeAwarePaths:
     def test_systemd_unit_dir_system(self) -> None:

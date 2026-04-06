@@ -6,6 +6,7 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any
 
+from psi.files import write_text_secure
 from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
 
 if TYPE_CHECKING:
@@ -107,8 +108,7 @@ class NitrokeyHSMProvider:
 
         self.state_dir.mkdir(parents=True, exist_ok=True)
         mapping_path = self.state_dir / secret_id
-        mapping_path.write_text(mapping)
-        mapping_path.chmod(0o600)
+        write_text_secure(mapping_path, mapping)
 
     def _load_public_key(self) -> bytes:
         """Load the public key from cache or extract from HSM."""

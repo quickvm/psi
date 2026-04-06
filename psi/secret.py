@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, NoReturn
 from loguru import logger
 
 from psi.errors import PsiError
+from psi.files import write_bytes_secure
 from psi.provider import get_provider, parse_mapping
 
 if TYPE_CHECKING:
@@ -26,8 +27,7 @@ def store(settings: PsiSettings) -> None:
     mapping_data = sys.stdin.buffer.read()
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     mapping_path = settings.state_dir / secret_id
-    mapping_path.write_bytes(mapping_data)
-    mapping_path.chmod(0o600)
+    write_bytes_secure(mapping_path, mapping_data)
     logger.bind(
         event="secret.store",
         secret_id=secret_id,
