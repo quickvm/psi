@@ -191,6 +191,10 @@ providers:
             - "systemctl reload traefik.service"
 ```
 
+Hook entries are split into argv and executed directly without a shell. Keep
+them as simple commands such as `"systemctl reload traefik.service"`; shell
+operators like `&&`, `|`, or `>` are not supported.
+
 ```bash
 psi infisical tls issue    # Issue all configured certificates
 psi infisical tls renew    # Renew certificates approaching expiry

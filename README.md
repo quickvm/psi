@@ -518,6 +518,10 @@ providers:
             - "systemctl restart traefik"
 ```
 
+Hook entries are parsed as command lines and executed directly, not via a shell.
+Use normal argv-style commands such as `"systemctl restart traefik"`; shell
+operators like `&&`, pipes, or redirection are not interpreted.
+
 ## FCOS deployment
 
 ```bash

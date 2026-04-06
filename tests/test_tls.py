@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +13,7 @@ from psi.providers.infisical.models import CertState, CertStatusInfo
 from psi.providers.infisical.tls import (
     _needs_renewal,
     _parse_duration_seconds,
+    _run_hooks,
     _write_cert_files,
     build_tls_status_table,
 )
@@ -194,6 +197,40 @@ class TestBuildTlsStatusTable:
         ]
         table = build_tls_status_table(certs)
         assert table.row_count == 1
+
+
+class TestRunHooks:
+    def test_runs_without_shell(self) -> None:
+        with patch("psi.providers.infisical.tls.subprocess.run") as mock_run:
+            assert _run_hooks(["systemctl reload traefik.service"], "web") is True
+
+        mock_run.assert_called_once_with(
+            ["systemctl", "reload", "traefik.service"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_reports_parse_error(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert _run_hooks(['echo "unterminated'], "web") is False
+        assert "parse error" in capsys.readouterr().out
+
+    def test_reports_empty_command(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert _run_hooks(["   "], "web") is False
+        assert "empty command" in capsys.readouterr().out
+
+    def test_reports_command_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch(
+            "psi.providers.infisical.tls.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                1,
+                ["systemctl", "reload", "traefik.service"],
+                stderr="failed",
+            ),
+        ):
+            assert _run_hooks(["systemctl reload traefik.service"], "web") is False
+
+        assert "stderr: failed" in capsys.readouterr().out
 
     def test_not_issued_shows_dash_for_days(self) -> None:
         certs = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -271,16 +272,28 @@ def _run_hooks(hooks: list[str], cert_name: str) -> bool:
     all_ok = True
     for hook in hooks:
         try:
+            argv = shlex.split(hook)
+        except ValueError as e:
+            console.print(f"  [red]Hook FAILED:[/red] {hook}\n    parse error: {e}")
+            all_ok = False
+            continue
+
+        if not argv:
+            console.print(f"  [red]Hook FAILED:[/red] {hook}\n    parse error: empty command")
+            all_ok = False
+            continue
+
+        try:
             subprocess.run(
-                hook,
-                shell=True,
+                argv,
                 check=True,
                 capture_output=True,  # noqa: S602
+                text=True,
             )
             console.print(f"  Hook OK: {hook}")
         except subprocess.CalledProcessError as e:
             console.print(
-                f"  [red]Hook FAILED:[/red] {hook}\n    stderr: {e.stderr.decode().strip()}"
+                f"  [red]Hook FAILED:[/red] {hook}\n    stderr: {e.stderr.strip()}"
             )
             all_ok = False
     return all_ok
