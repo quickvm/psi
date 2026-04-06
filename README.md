@@ -23,10 +23,11 @@ no container spawned per lookup, just a fast HTTP request to a local socket.
 
 ```
 Boot time:
-  psi serve      → starts the lookup service on /run/psi/psi.sock
-                   opens all configured providers (Infisical client, HSM session)
-  psi setup      → discovers secrets from Infisical, registers with Podman,
-                   writes systemd drop-ins
+  psi serve                        → starts the lookup service on /run/psi/psi.sock
+                                     opens all configured providers (Infisical client, HSM session)
+  psi setup --provider nitrokeyhsm → registers HSM-backed workloads (instant, local-only)
+  psi setup --provider infisical   → discovers secrets from Infisical, registers with Podman,
+                                     writes systemd drop-ins (retries if Infisical is starting)
 
 Container start:
   Podman → Secret=myapp--DB_HOST,type=env,target=DB_HOST
@@ -71,7 +72,7 @@ workloads:
   myapp:
     provider: infisical
     unit: myapp.container
-    depends_on: [psi-secrets-setup.service]
+    depends_on: [psi-infisical-setup.service]
     secrets:
       - project: myproject
         path: /myapp
@@ -169,7 +170,7 @@ workloads:
   myapp:
     provider: infisical
     unit: myapp.container
-    depends_on: [psi-secrets-setup.service]
+    depends_on: [psi-infisical-setup.service]
     secrets:
       - project: myproject
         path: /myapp
@@ -227,7 +228,7 @@ single template-level drop-in that all instances inherit.
 workloads:
   windmill-worker@:
     provider: infisical
-    depends_on: [psi-secrets-setup.service]
+    depends_on: [psi-infisical-setup.service]
     secrets:
       - project: homelab
         path: /windmill
@@ -275,7 +276,7 @@ workloads:
 in the `[Unit]` section of `50-secrets.conf`. A common pattern:
 
 ```yaml
-depends_on: [psi-secrets-setup.service]
+depends_on: [psi-infisical-setup.service]
 ```
 
 ### Secret naming
@@ -378,6 +379,8 @@ PSI auto-detects scope based on UID.
 ```
 psi serve                         Run the secret lookup service
 psi setup                         Discover secrets, register with Podman, generate drop-ins
+psi setup --provider infisical    Setup only Infisical-backed workloads (with retry)
+psi setup --provider nitrokeyhsm  Setup only Nitrokey HSM-backed workloads
 psi install                       Generate containers.conf.d/psi.conf
 psi systemd install               Generate systemd units (--mode native or container)
 ```
@@ -461,10 +464,100 @@ providers:
 sudo psi systemd install --mode container --image ghcr.io/quickvm/psi:latest --enable
 ```
 
-Generates:
+Generates per-provider setup units based on configured providers:
 - `psi-secrets.container` — long-running lookup service
-- `psi-secrets-setup.container` — oneshot that runs `psi setup` at boot
+- `psi-{provider}-setup.container` — oneshot per provider (e.g. `psi-infisical-setup`, `psi-nitrokeyhsm-setup`)
 - `psi-tls-renew.timer` + service — daily TLS renewal (if configured)
+
+The per-provider split allows independent systemd ordering. For example, Infisical
+can depend on the HSM setup unit for its bootstrap secrets, while other services
+depend on the Infisical setup unit:
+
+```
+pcscd.service (smartcard daemon for HSM access)
+  → psi-secrets.service (opens HSM + Infisical providers)
+    → psi-nitrokeyhsm-setup.service (instant, local-only)
+      → infisical.service (gets HSM-decrypted bootstrap secrets)
+        → psi-infisical-setup.service (queries Infisical API, retries on failure)
+          → all other services
+```
+
+### pcscd sidecar in container mode
+
+When using the Nitrokey HSM provider in container mode, pcscd must run as a
+sidecar container with USB device access. PSI and pcscd communicate via a shared
+Podman volume for the pcscd socket.
+
+**Set up pcscd (one-time, on the host):**
+
+```bash
+sudo psi nitrokeyhsm setup-pcscd
+sudo systemctl start pcscd.service
+```
+
+This builds a pcscd container image, creates a `pcscd-socket` volume, and
+installs quadlet files (`pcscd.container`, `pcscd-socket.volume`).
+
+**Configure PSI serve to use pcscd:**
+
+The PSI serve container needs the pcscd socket volume and a systemd ordering
+dependency:
+
+```ini
+# psi-secrets.container
+[Unit]
+After=network-online.target pcscd.service
+
+[Container]
+Volume=pcscd-socket:/run/pcscd:rw
+```
+
+**PIN delivery via TPM-sealed credential:**
+
+```ini
+[Service]
+LoadCredentialEncrypted=hsm-pin
+
+[Container]
+Volume=/run/credentials/psi-secrets.service:/run/credentials:ro
+Environment=CREDENTIALS_DIRECTORY=/run/credentials
+```
+
+See [Nitrokey HSM setup](#nitrokey-hsm-setup) for PIN encryption instructions.
+
+**For Butane/Ignition deployments**, include the pcscd quadlet files in your
+Butane config so they survive reprovision:
+
+```yaml
+- path: /etc/containers/systemd/pcscd-socket.volume
+  contents:
+    inline: |
+      [Volume]
+      VolumeName=pcscd-socket
+
+- path: /etc/containers/systemd/pcscd.container
+  contents:
+    inline: |
+      [Unit]
+      Description=pcscd smartcard daemon for HSM access
+      Before=psi-secrets.service
+
+      [Container]
+      ContainerName=pcscd
+      Image=localhost/pcscd:latest
+      AddDevice=/dev/bus/usb
+      Volume=pcscd-socket.volume:/run/pcscd:rw
+
+      [Service]
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+```
+
+The pcscd container image (`localhost/pcscd:latest`) must be built on the host
+before first boot via `psi nitrokeyhsm setup-pcscd`. It is not pulled from a
+registry.
 
 ## License
 

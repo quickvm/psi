@@ -61,12 +61,18 @@ JsonOption = Annotated[
 
 
 @app.command()
-def setup(config: ConfigOption = None) -> None:
+def setup(
+    config: ConfigOption = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="Only setup workloads for this provider."),
+    ] = None,
+) -> None:
     """Discover secrets, register with Podman, generate systemd drop-ins."""
     from psi.setup import run_setup
 
     settings = load_settings(config, scope=detect_scope())
-    run_setup(settings)
+    run_setup(settings, provider=provider)
 
 
 @app.command()

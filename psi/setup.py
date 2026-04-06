@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import TYPE_CHECKING
 
 import httpx
@@ -19,6 +20,8 @@ console = Console()
 
 _PODMAN_API_VERSION = "v5.0.0"
 
+_RETRY_DELAYS = (5, 10, 20, 40, 60)
+
 
 def _podman_socket_url() -> str:
     """Return the Podman API Unix socket path."""
@@ -28,11 +31,22 @@ def _podman_socket_url() -> str:
     return f"/run/user/{uid}/podman/podman.sock"
 
 
-def run_setup(settings: PsiSettings) -> None:
-    """Discover secrets for all workloads, register, and generate drop-ins."""
+def run_setup(
+    settings: PsiSettings,
+    provider: str | None = None,
+) -> None:
+    """Discover secrets for all workloads, register, and generate drop-ins.
+
+    Args:
+        settings: PSI configuration.
+        provider: If set, only process workloads using this provider.
+    """
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
     for workload_name, workload in settings.workloads.items():
+        if provider and workload.provider != provider:
+            continue
+
         console.print(f"\n[bold]Workload: {workload_name}[/bold]")
 
         if workload.provider == "infisical":
@@ -49,11 +63,47 @@ def run_setup(settings: PsiSettings) -> None:
     console.print("[green]Setup complete.[/green]")
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """Check if an exception is retryable (transient network/server error)."""
+    if isinstance(exc, httpx.ConnectError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (404, 502, 503)
+    return False
+
+
 def _setup_infisical_workload(
     settings: PsiSettings,
     workload_name: str,
 ) -> None:
-    """Run Infisical-specific setup for a workload."""
+    """Run Infisical-specific setup for a workload with retry."""
+    last_exc: Exception | None = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            _fetch_and_register_infisical(settings, workload_name)
+            return
+        except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
+            cause = e.__cause__ if isinstance(e, ProviderError) else e
+            check = cause if isinstance(cause, Exception) else e
+            if not _is_retryable(check):
+                raise
+            last_exc = e
+            if attempt < len(_RETRY_DELAYS):
+                delay = _RETRY_DELAYS[attempt]
+                console.print(
+                    f"  [yellow]Infisical unavailable, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{len(_RETRY_DELAYS)})[/yellow]"
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
+
+
+def _fetch_and_register_infisical(
+    settings: PsiSettings,
+    workload_name: str,
+) -> None:
+    """Fetch secrets from Infisical and register with Podman."""
     from psi.providers.infisical import InfisicalProvider
     from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 
@@ -68,27 +118,19 @@ def _setup_infisical_workload(
             project = infisical_config.projects[source.project]
             auth = resolve_auth(project, infisical_config)
             assert provider._client is not None
-            try:
-                token = provider._client.ensure_token(auth)
-            except httpx.ConnectError as e:
-                msg = f"Cannot reach Infisical API at {infisical_config.api_url}: {e}"
-                raise ProviderError(msg, provider_name="infisical") from e
+            token = provider._client.ensure_token(auth)
 
             console.print(
                 f"  Fetching [cyan]{source.project}[/cyan] path=[cyan]{source.path}[/cyan]"
             )
 
-            try:
-                secrets = provider._client.list_secrets(
-                    token,
-                    project.id,
-                    project.environment,
-                    source.path,
-                    recursive=source.recursive,
-                )
-            except httpx.ConnectError as e:
-                msg = f"Cannot reach Infisical API at {infisical_config.api_url}: {e}"
-                raise ProviderError(msg, provider_name="infisical") from e
+            secrets = provider._client.list_secrets(
+                token,
+                project.id,
+                project.environment,
+                source.path,
+                recursive=source.recursive,
+            )
 
             for secret in secrets:
                 key = secret["secretKey"]

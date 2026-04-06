@@ -16,23 +16,30 @@ if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
 
-def generate_native_setup_service(
+def generate_native_provider_setup_service(
     psi_path: str,
+    provider: str,
     scope: SystemdScope = SystemdScope.SYSTEM,
 ) -> str:
-    """Generate psi-secrets-setup.service for native mode."""
+    """Generate psi-{provider}-setup.service for native mode."""
     wanted_by = "default.target" if scope == SystemdScope.USER else "multi-user.target"
+    needs_network = provider == "infisical"
+    after = "psi-secrets.service"
+    wants = ""
+    if needs_network:
+        after = f"network-online.target {after}"
+        wants = "Wants=network-online.target\n"
     return (
         "[Unit]\n"
-        "Description=PSI secrets setup\n"
-        "After=network-online.target psi-secrets.service\n"
-        "Wants=network-online.target\n"
+        f"Description=PSI {provider} secrets setup\n"
+        f"After={after}\n"
+        f"{wants}"
         "Requires=psi-secrets.service\n"
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
         "RemainAfterExit=yes\n"
-        f"ExecStart={psi_path} setup\n"
+        f"ExecStart={psi_path} setup --provider {provider}\n"
         "\n"
         "[Install]\n"
         f"WantedBy={wanted_by}\n"
@@ -69,33 +76,46 @@ def generate_tls_renew_timer() -> str:
     )
 
 
-def generate_container_setup_quadlet(image: str, settings: PsiSettings) -> str:
-    """Generate psi-secrets-setup.container quadlet."""
+def generate_container_provider_setup_quadlet(
+    image: str,
+    settings: PsiSettings,
+    provider: str,
+) -> str:
+    """Generate psi-{provider}-setup.container quadlet."""
     state = settings.state_dir
     systemd = settings.systemd_dir
     config_dir = settings.config_dir
     dbus_socket = _dbus_socket_path(settings.scope)
     podman_socket = _podman_socket_path(settings.scope)
     wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
+    needs_network = provider == "infisical"
+    after = "psi-secrets.service"
+    if needs_network:
+        after = f"network-online.target {after}"
 
     lines = [
         "[Unit]",
-        "Description=PSI secrets setup",
-        "After=network-online.target psi-secrets.service",
-        "Wants=network-online.target",
-        "Requires=psi-secrets.service",
-        "",
-        "[Container]",
-        f"Image={image}",
-        "Exec=setup",
-        "Network=host",
-        "SecurityLabelType=container_runtime_t",
-        f"Volume={config_dir}:{config_dir}:ro",
-        f"Volume={state}:{state}:Z",
-        f"Volume={systemd}:{systemd}:Z",
-        f"Volume={podman_socket}:{podman_socket}:z",
-        f"Volume={dbus_socket}:{dbus_socket}",
+        f"Description=PSI {provider} secrets setup",
+        f"After={after}",
     ]
+    if needs_network:
+        lines.append("Wants=network-online.target")
+    lines.extend(
+        [
+            "Requires=psi-secrets.service",
+            "",
+            "[Container]",
+            f"Image={image}",
+            f"Exec=setup --provider {provider}",
+            "Network=host",
+            "SecurityLabelType=container_runtime_t",
+            f"Volume={config_dir}:{config_dir}:ro",
+            f"Volume={state}:{state}:Z",
+            f"Volume={systemd}:{systemd}:Z",
+            f"Volume={podman_socket}:{podman_socket}:z",
+            f"Volume={dbus_socket}:{dbus_socket}",
+        ]
+    )
 
     if settings.ca_cert:
         ssl_target = "/etc/ssl/certs/ca-certificates.crt"

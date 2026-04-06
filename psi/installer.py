@@ -11,12 +11,12 @@ from rich.console import Console
 
 from psi.models import DeployMode, SystemdScope
 from psi.unitgen import (
+    generate_container_provider_setup_quadlet,
     generate_container_serve_quadlet,
-    generate_container_setup_quadlet,
     generate_container_tls_renew_quadlet,
     generate_driver_conf,
+    generate_native_provider_setup_service,
     generate_native_serve_service,
-    generate_native_setup_service,
     generate_native_tls_renew_service,
     generate_tls_renew_timer,
 )
@@ -82,9 +82,11 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
         unit_dir / "psi-secrets.service",
         generate_native_serve_service(psi_path, scope),
     )
-    _write_unit(
-        unit_dir / "psi-secrets-setup.service",
-        generate_native_setup_service(psi_path, scope),
+
+    setup_units = _write_provider_setup_units_native(
+        settings,
+        psi_path,
+        unit_dir,
     )
 
     if _has_tls(settings):
@@ -101,7 +103,7 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
 
     if enable:
         _enable_units(
-            ["psi-secrets.service", "psi-secrets-setup.service"],
+            ["psi-secrets.service", *setup_units],
             _has_tls(settings),
             scope,
         )
@@ -117,9 +119,11 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
         quadlet_dir / "psi-secrets.container",
         generate_container_serve_quadlet(image, settings),
     )
-    _write_unit(
-        quadlet_dir / "psi-secrets-setup.container",
-        generate_container_setup_quadlet(image, settings),
+
+    setup_units = _write_provider_setup_units_container(
+        settings,
+        image,
+        quadlet_dir,
     )
 
     if _has_tls(settings):
@@ -136,10 +140,52 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
 
     if enable:
         _enable_units(
-            ["psi-secrets.service", "psi-secrets-setup.service"],
+            ["psi-secrets.service", *setup_units],
             _has_tls(settings),
             scope,
         )
+
+
+def _write_provider_setup_units_native(
+    settings: PsiSettings,
+    psi_path: str,
+    unit_dir: Path,
+) -> list[str]:
+    """Write per-provider setup units for native mode. Returns unit names."""
+    units: list[str] = []
+    for provider_name in settings.providers:
+        unit_name = f"psi-{provider_name}-setup.service"
+        _write_unit(
+            unit_dir / unit_name,
+            generate_native_provider_setup_service(
+                psi_path,
+                provider_name,
+                settings.scope,
+            ),
+        )
+        units.append(unit_name)
+    return units
+
+
+def _write_provider_setup_units_container(
+    settings: PsiSettings,
+    image: str,
+    quadlet_dir: Path,
+) -> list[str]:
+    """Write per-provider setup quadlets for container mode. Returns unit names."""
+    units: list[str] = []
+    for provider_name in settings.providers:
+        filename = f"psi-{provider_name}-setup.container"
+        _write_unit(
+            quadlet_dir / filename,
+            generate_container_provider_setup_quadlet(
+                image,
+                settings,
+                provider_name,
+            ),
+        )
+        units.append(f"psi-{provider_name}-setup.service")
+    return units
 
 
 def _write_unit(path: Path, content: str) -> None:
