@@ -292,9 +292,7 @@ def _run_hooks(hooks: list[str], cert_name: str) -> bool:
             )
             console.print(f"  Hook OK: {hook}")
         except subprocess.CalledProcessError as e:
-            console.print(
-                f"  [red]Hook FAILED:[/red] {hook}\n    stderr: {e.stderr.strip()}"
-            )
+            console.print(f"  [red]Hook FAILED:[/red] {hook}\n    stderr: {e.stderr.strip()}")
             all_ok = False
     return all_ok
 
