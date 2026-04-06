@@ -290,6 +290,67 @@ Secret=myapp--DATABASE_HOST,type=env,target=DATABASE_HOST
 
 The container sees `DATABASE_HOST` — the namespace prefix is transparent.
 
+### Socket authentication
+
+The PSI Unix socket at `/run/psi/psi.sock` is protected by filesystem permissions
+(root:0600), but any process running as root can read any secret. As a defense in depth,
+PSI supports a Bearer token on the socket. When configured, every request must include:
+
+```
+Authorization: Bearer <token>
+```
+
+The `/healthz` endpoint stays open for systemd liveness probes.
+
+**Configure via config file:**
+
+```yaml
+socket_token: "your-random-token"
+```
+
+**Configure via environment variable:**
+
+```bash
+export PSI_SOCKET_TOKEN="your-random-token"
+```
+
+**Configure via systemd credential (production, TPM-sealed):**
+
+```bash
+sudo systemd-ask-password "Socket token:" | \
+  sudo systemd-creds encrypt --with-key=tpm2 --name=psi-socket-token - \
+  /etc/credstore.encrypted/psi-socket-token
+```
+
+Add to the PSI serve unit:
+
+```ini
+[Service]
+LoadCredentialEncrypted=psi-socket-token
+```
+
+**Resolution order:** `$CREDENTIALS_DIRECTORY/psi-socket-token` → config `socket_token` →
+`PSI_SOCKET_TOKEN`.
+
+**Token format:** Minimum 8 characters, `[A-Za-z0-9._~+/=-]` only. Generate with:
+
+```bash
+openssl rand -base64 32 | tr -d '\n'
+```
+
+**After configuring, run `psi install`** — this regenerates `containers.conf.d/psi.conf`
+with the `Authorization` header embedded in the curl commands. The file is set to `0600`
+so only the config owner can read it.
+
+**Token rotation** is disruptive:
+
+1. Update the config/credential
+2. Restart `psi-secrets.service`
+3. Re-run `psi install`
+4. Reload systemd
+
+Containers started during the window between steps will fail secret lookups.
+
 ## Nitrokey HSM setup
 
 The Nitrokey HSM provider requires a pcscd sidecar container to communicate with the USB smartcard. PSI

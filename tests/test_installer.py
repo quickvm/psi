@@ -29,6 +29,7 @@ def _mock_settings(
     settings.scope = scope
     settings.tls = None
     settings.ca_cert = None
+    settings.socket_token = None
     settings.providers = providers or {}
     if scope == SystemdScope.USER:
         settings.config_dir = Path.home() / ".config/psi"

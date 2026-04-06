@@ -41,6 +41,7 @@ class PsiSettings(BaseSettings):
     state_dir: Path = _SYSTEM_STATE_DIR
     systemd_dir: Path = _SYSTEM_SYSTEMD_DIR
     ca_cert: Path | None = None
+    socket_token: str | None = None
     providers: dict[str, Any] = {}
     workloads: dict[str, WorkloadConfig] = {}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -12,6 +13,7 @@ from loguru import logger
 
 from psi.errors import PsiError
 from psi.provider import close_all_providers, open_all_providers, parse_mapping
+from psi.token import resolve_socket_token
 
 if TYPE_CHECKING:
     from psi.settings import PsiSettings
@@ -28,8 +30,13 @@ class _UnixHTTPServer(UnixStreamServer, HTTPServer):
 def run_serve(settings: PsiSettings, socket_path: str) -> None:
     """Start the lookup service on a Unix socket."""
     providers = open_all_providers(settings)
+    token = resolve_socket_token(settings)
+    if token:
+        logger.info("Socket auth enabled")
+    else:
+        logger.info("Socket auth disabled — no token configured")
     try:
-        handler = _make_handler(settings, providers)
+        handler = _make_handler(settings, providers, token)
 
         if os.path.exists(socket_path):
             os.unlink(socket_path)
@@ -54,15 +61,39 @@ def run_serve(settings: PsiSettings, socket_path: str) -> None:
 def _make_handler(
     settings: PsiSettings,
     providers: dict,
+    token: str | None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create a request handler with access to settings and providers."""
 
     class Handler(BaseHTTPRequestHandler):
+        def _check_auth(self) -> bool:
+            """Validate the Authorization header against the configured token.
+
+            Returns True if auth is not configured, or if the token matches.
+            """
+            if not token:
+                return True
+            provided = self.headers.get("Authorization", "")
+            expected = f"Bearer {token}"
+            return hmac.compare_digest(provided, expected)
+
+        def _unauthorized(self) -> None:
+            logger.bind(
+                event="socket.auth",
+                outcome="error",
+                path=self.path,
+            ).warning("unauthorized request")
+            self._respond_error(401, "unauthorized", "invalid or missing token")
+
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.rstrip("/")
 
             if path == "/healthz":
                 self._respond(200, b"ok")
+                return
+
+            if not self._check_auth():
+                self._unauthorized()
                 return
 
             if path.startswith("/lookup/"):
@@ -78,6 +109,10 @@ def _make_handler(
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.rstrip("/")
 
+            if not self._check_auth():
+                self._unauthorized()
+                return
+
             if path.startswith("/store/"):
                 self._handle_store(path[len("/store/") :])
                 return
@@ -86,6 +121,10 @@ def _make_handler(
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = self.path.rstrip("/")
+
+            if not self._check_auth():
+                self._unauthorized()
+                return
 
             if path.startswith("/delete/"):
                 self._handle_delete(path[len("/delete/") :])

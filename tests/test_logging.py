@@ -4,16 +4,31 @@ from __future__ import annotations
 
 import io
 import json
+from typing import TYPE_CHECKING
 
+import pytest
 from loguru import logger
 
 from psi.logging import configure_logging
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@pytest.fixture(autouse=True)
+def _reset_logger() -> Iterator[None]:
+    """Snapshot and restore loguru handlers around each test.
+
+    Prevents sinks added by tests from leaking into later tests and
+    writing to closed StringIO objects.
+    """
+    yield
+    logger.remove()
 
 
 class TestConfigureLogging:
     def test_json_mode_serializes(self) -> None:
         sink = io.StringIO()
-        configure_logging(level="INFO", json_output=True)
         logger.remove()
         logger.add(sink, serialize=True, level="INFO")
 
@@ -27,7 +42,6 @@ class TestConfigureLogging:
 
     def test_level_filtering(self) -> None:
         sink = io.StringIO()
-        configure_logging(level="WARNING", json_output=True)
         logger.remove()
         logger.add(sink, serialize=True, level="WARNING")
 
@@ -52,3 +66,13 @@ class TestConfigureLogging:
 
         output = sink.getvalue()
         assert "should-never-appear" not in output
+
+    def test_configure_logging_removes_existing_handlers(self) -> None:
+        """configure_logging() should remove any previously registered sinks."""
+        sink = io.StringIO()
+        logger.add(sink, serialize=True, level="INFO")
+
+        configure_logging(level="INFO", json_output=True)
+
+        logger.info("after configure")
+        assert "after configure" not in sink.getvalue()
