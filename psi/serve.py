@@ -13,6 +13,7 @@ from loguru import logger
 
 from psi.errors import PsiError
 from psi.provider import close_all_providers, open_all_providers, parse_mapping
+from psi.secret import validate_secret_id
 from psi.token import resolve_socket_token
 
 if TYPE_CHECKING:
@@ -136,6 +137,11 @@ def _make_handler(
             if not secret_id:
                 self._respond_error(400, "missing_secret_id", "SECRET_ID not set")
                 return
+            try:
+                secret_id = validate_secret_id(secret_id)
+            except ValueError as e:
+                self._respond_error(400, "invalid_secret_id", str(e))
+                return
 
             mapping_path = settings.state_dir / secret_id
             if not mapping_path.exists():
@@ -179,6 +185,11 @@ def _make_handler(
             if not secret_id:
                 self._respond(400, b"secret_id required")
                 return
+            try:
+                secret_id = validate_secret_id(secret_id)
+            except ValueError as e:
+                self._respond_error(400, "invalid_secret_id", str(e))
+                return
 
             length = int(self.headers.get("Content-Length", 0))
             data = self.rfile.read(length)
@@ -197,6 +208,11 @@ def _make_handler(
         def _handle_delete(self, secret_id: str) -> None:
             if not secret_id:
                 self._respond(400, b"secret_id required")
+                return
+            try:
+                secret_id = validate_secret_id(secret_id)
+            except ValueError as e:
+                self._respond_error(400, "invalid_secret_id", str(e))
                 return
 
             mapping_path = settings.state_dir / secret_id

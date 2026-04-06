@@ -106,6 +106,20 @@ def _require_secret_id() -> str:
     secret_id = os.environ.get("SECRET_ID", "")
     if not secret_id:
         _fail("SECRET_ID environment variable not set")
+    try:
+        return validate_secret_id(secret_id)
+    except ValueError as e:
+        _fail(str(e))
+
+
+def validate_secret_id(secret_id: str) -> str:
+    """Validate that a secret ID is safe to use as a state-dir filename."""
+    if secret_id in ("", ".", ".."):
+        msg = "Invalid secret ID"
+        raise ValueError(msg)
+    if "/" in secret_id or "\\" in secret_id:
+        msg = "Invalid secret ID: path separators are not allowed"
+        raise ValueError(msg)
     return secret_id
 
 

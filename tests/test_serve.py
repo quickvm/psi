@@ -82,6 +82,28 @@ class TestAuthDisabled:
         h.do_GET()
         assert h._status == 200
 
+    def test_lookup_rejects_path_traversal_secret_id(self, tmp_path: Path) -> None:
+        handler_cls = _make_test_handler(tmp_path, token=None)
+        h = handler_cls("/lookup/../outside", headers={})
+        h.do_GET()
+
+        assert h._status == 400
+        body = json.loads(h.wfile.getvalue())
+        assert body["error"] == "invalid_secret_id"
+
+    def test_store_rejects_path_traversal_secret_id(self, tmp_path: Path) -> None:
+        outside = tmp_path.parent / "outside"
+        handler_cls = _make_test_handler(tmp_path, token=None)
+        h = handler_cls(
+            "/store/../outside",
+            headers={"Content-Length": "4"},
+            body=b"data",
+        )
+        h.do_POST()
+
+        assert h._status == 400
+        assert not outside.exists()
+
 
 class TestAuthEnabled:
     TOKEN = "abcdefgh1234567890"

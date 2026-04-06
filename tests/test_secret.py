@@ -16,6 +16,7 @@ from psi.secret import (
     list_secrets,
     lookup,
     store,
+    validate_secret_id,
 )
 
 if TYPE_CHECKING:
@@ -250,6 +251,24 @@ class TestRequireSecretId:
         monkeypatch.setenv("SECRET_ID", "")
         with pytest.raises(SystemExit):
             _require_secret_id()
+
+    def test_exits_when_path_traversal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SECRET_ID", "../outside")
+        with pytest.raises(SystemExit):
+            _require_secret_id()
+
+
+class TestValidateSecretId:
+    def test_accepts_normal_secret_id(self) -> None:
+        assert validate_secret_id("myapp--DB_HOST") == "myapp--DB_HOST"
+
+    def test_rejects_forward_slash(self) -> None:
+        with pytest.raises(ValueError, match="path separators"):
+            validate_secret_id("../outside")
+
+    def test_rejects_backslash(self) -> None:
+        with pytest.raises(ValueError, match="path separators"):
+            validate_secret_id(r"..\\outside")
 
 
 class TestFail:
