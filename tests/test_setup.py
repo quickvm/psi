@@ -1,13 +1,17 @@
-"""Tests for psi.setup drop-in generation."""
+"""Tests for psi.setup drop-in generation and provider filtering."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
+
+import httpx
+import pytest
 
 from psi.models import SecretSource, SystemdScope, WorkloadConfig
 from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
-from psi.setup import _generate_drop_in
+from psi.setup import _generate_drop_in, _is_retryable, _setup_infisical_workload
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -15,13 +19,12 @@ if TYPE_CHECKING:
 
 def _make_settings(
     tmp_path: Path,
-    workloads: dict[str, WorkloadConfig],
+    workloads: dict[str, WorkloadConfig] | None = None,
+    providers: dict | None = None,
 ) -> PsiSettings:
-    """Build a minimal settings object for _generate_drop_in."""
-    return PsiSettings(
-        state_dir=tmp_path / "state",
-        systemd_dir=tmp_path / "systemd",
-        providers={
+    """Build a minimal settings object."""
+    if providers is None:
+        providers = {
             "infisical": {
                 "api_url": "https://infisical.test",
                 "auth": {
@@ -33,8 +36,12 @@ def _make_settings(
                     "myproject": {"id": "proj-uuid", "environment": "prod"},
                 },
             },
-        },
-        workloads=workloads,
+        }
+    return PsiSettings(
+        state_dir=tmp_path / "state",
+        systemd_dir=tmp_path / "systemd",
+        providers=providers,
+        workloads=workloads or {},
         scope=SystemdScope.SYSTEM,
     )
 
@@ -157,3 +164,109 @@ class TestTemplateUnitDropIn:
         assert "After=psi-secrets-setup.service\n" in content
         assert "Wants=psi-secrets-setup.service\n" in content
         assert "Secret=windmill-worker@--DB_HOST" in content
+
+
+class TestIsRetryable:
+    def test_connect_error_is_retryable(self) -> None:
+        assert _is_retryable(httpx.ConnectError("refused"))
+
+    def test_502_is_retryable(self) -> None:
+        request = httpx.Request("GET", "http://test")
+        response = httpx.Response(502, request=request)
+        exc = httpx.HTTPStatusError("bad gateway", request=request, response=response)
+        assert _is_retryable(exc)
+
+    def test_503_is_retryable(self) -> None:
+        request = httpx.Request("GET", "http://test")
+        response = httpx.Response(503, request=request)
+        exc = httpx.HTTPStatusError("unavailable", request=request, response=response)
+        assert _is_retryable(exc)
+
+    def test_404_is_retryable(self) -> None:
+        request = httpx.Request("GET", "http://test")
+        response = httpx.Response(404, request=request)
+        exc = httpx.HTTPStatusError("not found", request=request, response=response)
+        assert _is_retryable(exc)
+
+    def test_401_is_not_retryable(self) -> None:
+        request = httpx.Request("GET", "http://test")
+        response = httpx.Response(401, request=request)
+        exc = httpx.HTTPStatusError("unauthorized", request=request, response=response)
+        assert not _is_retryable(exc)
+
+    def test_other_exception_is_not_retryable(self) -> None:
+        assert not _is_retryable(ValueError("nope"))
+
+
+class TestSetupRetry:
+    def test_retries_on_connect_error_then_succeeds(self, tmp_path: Path) -> None:
+        call_count = 0
+
+        def mock_fetch(settings, workload_name):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise httpx.ConnectError("refused")
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.time.sleep"),
+        ):
+            _setup_infisical_workload(settings, "myapp")
+
+        assert call_count == 3
+
+    def test_raises_after_all_retries_exhausted(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch(
+                "psi.setup._fetch_and_register_infisical",
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            patch("psi.setup.time.sleep"),
+            pytest.raises(httpx.ConnectError, match="refused"),
+        ):
+            _setup_infisical_workload(settings, "myapp")
+
+    def test_non_retryable_error_raises_immediately(self, tmp_path: Path) -> None:
+        request = httpx.Request("GET", "http://test")
+        response = httpx.Response(401, request=request)
+        exc = httpx.HTTPStatusError("unauthorized", request=request, response=response)
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch(
+                "psi.setup._fetch_and_register_infisical",
+                side_effect=exc,
+            ),
+            pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
+        ):
+            _setup_infisical_workload(settings, "myapp")

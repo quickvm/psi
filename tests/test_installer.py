@@ -11,6 +11,8 @@ from psi.installer import (
     _containers_conf_dir,
     _find_psi_path,
     _systemd_unit_dir,
+    _write_provider_setup_units_container,
+    _write_provider_setup_units_native,
     install_driver_conf,
 )
 from psi.models import SystemdScope
@@ -19,12 +21,19 @@ from psi.models import SystemdScope
 def _mock_settings(
     tmp_path: Path,
     scope: SystemdScope = SystemdScope.SYSTEM,
+    providers: dict | None = None,
 ) -> MagicMock:
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
     settings.systemd_dir = tmp_path / "systemd"
     settings.scope = scope
     settings.tls = None
+    settings.ca_cert = None
+    settings.providers = providers or {}
+    if scope == SystemdScope.USER:
+        settings.config_dir = Path.home() / ".config/psi"
+    else:
+        settings.config_dir = Path("/etc/psi")
     return settings
 
 
@@ -79,3 +88,70 @@ class TestScopeAwarePaths:
     def test_containers_conf_dir_user(self) -> None:
         expected = Path.home() / ".config/containers/containers.conf.d"
         assert _containers_conf_dir(SystemdScope.USER) == expected
+
+
+class TestPerProviderSetupUnits:
+    def test_native_both_providers(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}, "nitrokeyhsm": {}},
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        units = _write_provider_setup_units_native(
+            settings,
+            "/usr/bin/psi",
+            unit_dir,
+        )
+        assert "psi-infisical-setup.service" in units
+        assert "psi-nitrokeyhsm-setup.service" in units
+        assert (unit_dir / "psi-infisical-setup.service").exists()
+        assert (unit_dir / "psi-nitrokeyhsm-setup.service").exists()
+
+    def test_native_single_provider(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}},
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        units = _write_provider_setup_units_native(
+            settings,
+            "/usr/bin/psi",
+            unit_dir,
+        )
+        assert units == ["psi-infisical-setup.service"]
+        assert not (unit_dir / "psi-nitrokeyhsm-setup.service").exists()
+
+    def test_container_both_providers(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}, "nitrokeyhsm": {}},
+        )
+        quadlet_dir = tmp_path / "quadlets"
+        quadlet_dir.mkdir()
+        units = _write_provider_setup_units_container(
+            settings,
+            "psi:latest",
+            quadlet_dir,
+        )
+        assert "psi-infisical-setup.service" in units
+        assert "psi-nitrokeyhsm-setup.service" in units
+        assert (quadlet_dir / "psi-infisical-setup.container").exists()
+        assert (quadlet_dir / "psi-nitrokeyhsm-setup.container").exists()
+
+    def test_container_infisical_content(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}},
+        )
+        quadlet_dir = tmp_path / "quadlets"
+        quadlet_dir.mkdir()
+        _write_provider_setup_units_container(
+            settings,
+            "psi:latest",
+            quadlet_dir,
+        )
+        content = (quadlet_dir / "psi-infisical-setup.container").read_text()
+        assert "Exec=setup --provider infisical" in content
+        assert "network-online.target" in content
