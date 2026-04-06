@@ -151,26 +151,41 @@ def _fetch_and_register_infisical(
 
 
 def _systemd_daemon_reload(scope: SystemdScope) -> None:
-    """Reload systemd via D-Bus, falling back to systemctl."""
-    try:
-        import dbus
+    """Reload systemd via D-Bus, falling back to systemctl.
 
-        bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
-        systemd = bus.get_object(
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-        )
-        manager = dbus.Interface(
-            systemd,
-            "org.freedesktop.systemd1.Manager",
-        )
-        manager.Reload()
-    except ImportError:
-        cmd = ["systemctl"]
-        if scope == SystemdScope.USER:
-            cmd.append("--user")
-        cmd.append("daemon-reload")
+    Logs a warning and skips if neither D-Bus nor systemctl is available
+    (e.g. minimal test containers without systemd).
+    """
+    try:
+        _dbus_daemon_reload(scope)
+        return
+    except Exception as e:
+        logger.debug("D-Bus daemon-reload failed ({}), falling back to systemctl", e)
+
+    cmd = ["systemctl"]
+    if scope == SystemdScope.USER:
+        cmd.append("--user")
+    cmd.append("daemon-reload")
+    try:
         subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        logger.warning("systemctl not available, skipping daemon-reload")
+
+
+def _dbus_daemon_reload(scope: SystemdScope) -> None:
+    """Reload systemd via D-Bus. Raises on any failure."""
+    import dbus
+
+    bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
+    systemd = bus.get_object(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+    )
+    manager = dbus.Interface(
+        systemd,
+        "org.freedesktop.systemd1.Manager",
+    )
+    manager.Reload()
 
 
 def _register_secrets(
