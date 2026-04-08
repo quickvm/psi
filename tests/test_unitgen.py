@@ -16,7 +16,9 @@ from psi.unitgen import (
     generate_native_provider_setup_service,
     generate_native_serve_service,
     generate_native_tls_renew_service,
+    generate_provider_setup_timer,
     generate_tls_renew_timer,
+    provider_supports_refresh,
 )
 
 
@@ -440,3 +442,40 @@ class TestQuadletTranslatability:
         assert "HealthCmd=curl -sf --unix-socket " in content
         assert "http://localhost/healthz" in content
         assert "HealthStartPeriod=60s" in content
+
+
+class TestProviderRefreshSupport:
+    def test_infisical_supports_refresh(self) -> None:
+        assert provider_supports_refresh("infisical") is True
+
+    def test_nitrokeyhsm_does_not_support_refresh(self) -> None:
+        assert provider_supports_refresh("nitrokeyhsm") is False
+
+    def test_unknown_provider_does_not_support_refresh(self) -> None:
+        assert provider_supports_refresh("random-name") is False
+
+
+class TestProviderSetupTimer:
+    def test_targets_matching_setup_unit(self) -> None:
+        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        assert "Unit=psi-infisical-setup.service" in content
+
+    def test_interval_and_randomized_delay_are_passed_through(self) -> None:
+        content = generate_provider_setup_timer("infisical", "30m", "2m")
+        assert "OnUnitActiveSec=30m" in content
+        assert "OnBootSec=30m" in content
+        assert "RandomizedDelaySec=2m" in content
+
+    def test_is_persistent_so_missed_refreshes_run_on_next_boot(self) -> None:
+        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        assert "Persistent=true" in content
+
+    def test_install_section_hooks_into_timers_target(self) -> None:
+        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        assert "[Install]" in content
+        assert "WantedBy=timers.target" in content
+
+    def test_description_mentions_cache_refresh(self) -> None:
+        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        assert "Description=" in content
+        assert "cache refresh" in content.lower()

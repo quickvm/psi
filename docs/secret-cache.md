@@ -85,14 +85,22 @@ Add a `cache:` block at the top level of `/etc/psi/config.yaml`:
 
 ```yaml
 cache:
-  enabled: true        # default: true
-  backend: hsm         # 'tpm' or 'hsm'. Required for the cache to populate.
-  # path: /var/lib/psi/cache.enc    # default: state_dir / cache.enc
+  enabled: true                  # default: true
+  backend: hsm                   # 'tpm' or 'hsm'. Required for the cache to populate.
+  # path: /var/lib/psi/cache.enc # default: state_dir / cache.enc
+  refresh_interval: 1h           # default: 1h — systemd time string
+  refresh_randomized_delay: 5m   # default: 5m — spreads refreshes across a fleet
 ```
 
 If `cache.backend` is unset, `psi serve` logs a warning at startup and falls
 back to today's live-lookup behavior. Existing installs that upgrade but do
 not set a backend continue to work exactly as before.
+
+`refresh_interval` and `refresh_randomized_delay` are passed to
+`OnUnitActiveSec` and `RandomizedDelaySec` in the generated
+`psi-{provider}-setup.timer`. See the [rotation and periodic refresh
+section](#rotation-and-periodic-refresh) below for how the timer triggers
+and how to tune it on a deployed host.
 
 ## Backends
 
@@ -362,7 +370,57 @@ Options:
 This is a trade-off of the push-at-rotation-time design — cold-boot
 resilience depends on the provider being up during initial provisioning.
 
-## Rotation
+## Rotation and periodic refresh
+
+PSI refreshes cached secrets from three triggers: a systemd timer on a
+configurable interval, an explicit CLI command, and an automatic refill
+on cache miss at lookup time.
+
+### Scheduled refresh (timer)
+
+`psi systemd install` generates a `psi-{provider}-setup.timer` next to
+each refreshable provider's setup service — today that means
+`psi-infisical-setup.timer`. The timer triggers the same setup unit that
+ran at boot, which re-fetches every configured secret value and
+atomically replaces `cache.enc`. Tune the cadence in config:
+
+```yaml
+cache:
+  enabled: true
+  backend: hsm
+  refresh_interval: 1h          # systemd time string: 30m, 2h, 1d, etc.
+  refresh_randomized_delay: 5m  # spreads refreshes across a fleet
+```
+
+The generated timer uses `OnBootSec` and `OnUnitActiveSec` (both set to
+`refresh_interval`) plus `Persistent=true`, so:
+
+- The first scheduled refresh runs `refresh_interval` after boot
+- Subsequent refreshes run `refresh_interval` after the last successful
+  run
+- A refresh missed while the host was powered off runs on the next boot
+
+The timer is only generated when `cache.enabled` is true and
+`cache.backend` is set. If the cache is off, there is nothing to refresh
+and no timer is written. The nitrokeyhsm provider does not get a timer —
+its secrets are local-only and do not need periodic re-fetching.
+
+To override the interval without editing config, drop a systemd override:
+
+```bash
+sudo systemctl edit psi-infisical-setup.timer
+```
+
+```ini
+[Timer]
+OnUnitActiveSec=
+OnUnitActiveSec=15m
+```
+
+(Setting the key to an empty value first clears the generated value
+before the override applies.)
+
+### Manual refresh
 
 ```bash
 # Rotate a secret in Infisical, then refresh the entire cache:
@@ -370,13 +428,25 @@ sudo psi cache refresh
 
 # Or invalidate a single entry and let the next lookup pull it fresh:
 sudo psi cache invalidate myapp--DATABASE_URL
+
+# Or just kick the timer-managed setup unit directly:
+sudo systemctl start psi-infisical-setup.service
 ```
 
-`psi cache refresh` re-runs the same code path as
-`psi-infisical-setup.service`, pulls every configured workload secret,
-encrypts the bundle, and atomically replaces `cache.enc`. Running
-`refresh` during an Infisical outage is safe — it will retry via the
-existing setup backoff, and on failure it leaves the old cache untouched.
+`psi cache refresh` and the timer both run the same code path as
+`psi-infisical-setup.service`: pull every configured workload secret,
+encrypt the bundle, and atomically replace `cache.enc`. Running either
+during an Infisical outage is safe — `psi/setup.py` retries via the
+existing backoff and leaves the old cache untouched on failure.
+
+### On-miss refill
+
+If `psi serve` gets a lookup for a secret that is not in the in-memory
+dict (first lookup after a `psi cache invalidate`, or a secret added
+between refreshes), it calls the provider, returns the value, and
+`cache.set() + cache.save()` persists it. This only helps when the
+provider is reachable at lookup time — the durable path remains the
+boot-time populate plus the periodic timer.
 
 ## Troubleshooting
 

@@ -29,6 +29,8 @@ class CacheConfig(BaseModel):
     enabled: bool = True
     backend: Literal["tpm", "hsm"] | None = None
     path: Path | None = None
+    refresh_interval: str = "1h"
+    refresh_randomized_delay: str = "5m"
 
     def resolve_path(self, state_dir: Path) -> Path:
         """Return the cache file path, defaulting to ``state_dir/cache.enc``."""

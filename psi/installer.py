@@ -20,7 +20,9 @@ from psi.unitgen import (
     generate_native_provider_setup_service,
     generate_native_serve_service,
     generate_native_tls_renew_service,
+    generate_provider_setup_timer,
     generate_tls_renew_timer,
+    provider_supports_refresh,
 )
 
 if TYPE_CHECKING:
@@ -96,6 +98,8 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
         unit_dir,
     )
 
+    refresh_timers = _write_refresh_timers(settings, unit_dir)
+
     if _has_tls(settings):
         _write_unit(
             unit_dir / "psi-tls-renew.service",
@@ -113,6 +117,7 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
             ["psi-secrets.service", *setup_units],
             _has_tls(settings),
             scope,
+            refresh_timers=refresh_timers,
         )
 
 
@@ -133,6 +138,10 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
         quadlet_dir,
     )
 
+    # Timers are plain systemd units — they live in the unit_dir regardless of
+    # whether the setup unit itself comes from a quadlet or a native service.
+    refresh_timers = _write_refresh_timers(settings, _systemd_unit_dir(scope))
+
     if _has_tls(settings):
         _write_unit(
             quadlet_dir / "psi-tls-renew.container",
@@ -150,6 +159,7 @@ def _install_container(settings: PsiSettings, image: str, enable: bool) -> None:
             ["psi-secrets.service", *setup_units],
             _has_tls(settings),
             scope,
+            refresh_timers=refresh_timers,
         )
 
 
@@ -195,6 +205,33 @@ def _write_provider_setup_units_container(
     return units
 
 
+def _write_refresh_timers(settings: PsiSettings, unit_dir: Path) -> list[str]:
+    """Write periodic cache-refresh timers for providers that support them.
+
+    Returns the list of timer unit names written. Emits nothing and returns
+    an empty list when the cache is disabled or no backend is configured —
+    there is nothing to refresh if PSI is not caching values.
+    """
+    if not settings.cache.enabled or settings.cache.backend is None:
+        return []
+
+    timers: list[str] = []
+    for provider_name in settings.providers:
+        if not provider_supports_refresh(provider_name):
+            continue
+        timer_name = f"psi-{provider_name}-setup.timer"
+        _write_unit(
+            unit_dir / timer_name,
+            generate_provider_setup_timer(
+                provider_name,
+                settings.cache.refresh_interval,
+                settings.cache.refresh_randomized_delay,
+            ),
+        )
+        timers.append(timer_name)
+    return timers
+
+
 def _write_unit(path: Path, content: str) -> None:
     """Write a unit file and log it."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +256,7 @@ def _enable_units(
     base_units: list[str],
     has_tls: object,
     scope: SystemdScope,
+    refresh_timers: list[str] | None = None,
 ) -> None:
     """Enable and start units."""
     cmd_prefix = ["systemctl"]
@@ -228,6 +266,10 @@ def _enable_units(
     for unit in base_units:
         subprocess.run([*cmd_prefix, "enable", "--now", unit], check=True)
         logger.info("Enabled {}", unit)
+
+    for timer in refresh_timers or []:
+        subprocess.run([*cmd_prefix, "enable", "--now", timer], check=True)
+        logger.info("Enabled {}", timer)
 
     if has_tls:
         subprocess.run(

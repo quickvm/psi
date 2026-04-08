@@ -138,6 +138,51 @@ def generate_tls_renew_timer() -> str:
     )
 
 
+# Providers whose setup path talks to a remote and therefore benefits from
+# periodic refresh. The HSM provider is local-only and does not need a timer.
+_REFRESHABLE_PROVIDERS = frozenset({"infisical"})
+
+
+def provider_supports_refresh(provider: str) -> bool:
+    """Return True when a periodic refresh timer makes sense for ``provider``."""
+    return provider in _REFRESHABLE_PROVIDERS
+
+
+def generate_provider_setup_timer(
+    provider: str,
+    interval: str,
+    randomized_delay: str,
+) -> str:
+    """Generate psi-{provider}-setup.timer for periodic secret cache refresh.
+
+    The timer triggers the matching ``psi-{provider}-setup.service`` unit on
+    a relative interval (``OnUnitActiveSec``) so the cache picks up secrets
+    rotated upstream between reboots. ``Persistent=true`` ensures a missed
+    refresh runs on the next boot rather than waiting a full interval.
+
+    Args:
+        provider: Provider name (currently only ``infisical`` is supported).
+        interval: systemd time string for ``OnUnitActiveSec`` (e.g. ``"1h"``,
+            ``"30m"``, ``"2h"``).
+        randomized_delay: systemd time string for ``RandomizedDelaySec`` to
+            spread refresh events across a fleet.
+    """
+    return (
+        "[Unit]\n"
+        f"Description=Periodic PSI {provider} secret cache refresh\n"
+        "\n"
+        "[Timer]\n"
+        f"Unit=psi-{provider}-setup.service\n"
+        f"OnBootSec={interval}\n"
+        f"OnUnitActiveSec={interval}\n"
+        f"RandomizedDelaySec={randomized_delay}\n"
+        "Persistent=true\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=timers.target\n"
+    )
+
+
 def generate_container_provider_setup_quadlet(
     image: str,
     settings: PsiSettings,
