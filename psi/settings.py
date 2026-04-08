@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import ValidationError, model_validator
+from pydantic import BaseModel, ValidationError, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -15,6 +15,25 @@ from pydantic_settings import (
 
 from psi.errors import ConfigError
 from psi.models import SystemdScope, WorkloadConfig
+
+
+class CacheConfig(BaseModel):
+    """Configuration for the encrypted secret cache.
+
+    When ``enabled`` is True and ``backend`` is set, ``psi serve`` loads
+    ``cache.enc`` at startup and serves matching lookups from memory. If the
+    backend cannot be opened (e.g. TPM credential missing), PSI logs a warning
+    and falls back to live provider lookups.
+    """
+
+    enabled: bool = True
+    backend: Literal["tpm", "hsm"] | None = None
+    path: Path | None = None
+
+    def resolve_path(self, state_dir: Path) -> Path:
+        """Return the cache file path, defaulting to ``state_dir/cache.enc``."""
+        return self.path if self.path is not None else state_dir / "cache.enc"
+
 
 _SYSTEM_CONFIG = Path("/etc/psi/config.yaml")
 _SYSTEM_STATE_DIR = Path("/var/lib/psi")
@@ -44,6 +63,7 @@ class PsiSettings(BaseSettings):
     socket_token: str | None = None
     providers: dict[str, Any] = {}
     workloads: dict[str, WorkloadConfig] = {}
+    cache: CacheConfig = CacheConfig()
 
     @property
     def config_dir(self) -> Path:

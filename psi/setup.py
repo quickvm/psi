@@ -14,6 +14,7 @@ from psi.errors import ProviderError
 from psi.models import SystemdScope
 
 if TYPE_CHECKING:
+    from psi.cache import Cache
     from psi.settings import PsiSettings
 
 _PODMAN_API_VERSION = "v5.0.0"
@@ -41,22 +42,70 @@ def run_setup(
     """
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
-    for workload_name, workload in settings.workloads.items():
-        if provider and workload.provider != provider:
-            continue
+    cache = _open_setup_cache(settings)
+    cache_updates: dict[str, bytes] = {}
 
-        logger.info("Workload: {}", workload_name)
+    try:
+        for workload_name, workload in settings.workloads.items():
+            if provider and workload.provider != provider:
+                continue
 
-        if workload.provider == "infisical":
-            _setup_infisical_workload(settings, workload_name)
-        elif workload.provider == "nitrokeyhsm":
-            logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
-        else:
-            logger.warning("Unknown provider '{}', skipping", workload.provider)
+            logger.info("Workload: {}", workload_name)
+
+            if workload.provider == "infisical":
+                _setup_infisical_workload(settings, workload_name, cache_updates)
+            elif workload.provider == "nitrokeyhsm":
+                logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
+            else:
+                logger.warning("Unknown provider '{}', skipping", workload.provider)
+
+        if cache is not None and cache_updates:
+            logger.info("Writing {} entries to secret cache", len(cache_updates))
+            for key, value in cache_updates.items():
+                cache.set(key, value)
+            cache.save()
+    finally:
+        if cache is not None:
+            cache.close()
 
     logger.info("Reloading systemd...")
     _systemd_daemon_reload(settings.scope)
     logger.info("Setup complete.")
+
+
+def _open_setup_cache(settings: PsiSettings) -> Cache | None:
+    """Open the cache for write during setup, or return None on any failure."""
+    if not settings.cache.enabled or settings.cache.backend is None:
+        return None
+
+    from psi.cache import Cache
+    from psi.cache_backends import make_backend
+
+    try:
+        backend = make_backend(settings.cache.backend, settings)
+        open_method = getattr(backend, "open", None)
+        if callable(open_method):
+            open_method()
+    except Exception as e:
+        logger.warning(
+            "Secret cache backend {} unavailable during setup: {}. "
+            "Skipping cache population — container starts will hit the live provider.",
+            settings.cache.backend,
+            e,
+        )
+        return None
+
+    cache = Cache(settings.cache.resolve_path(settings.state_dir), backend)
+    try:
+        cache.load()
+    except Exception as e:
+        logger.warning(
+            "Secret cache at {} is unreadable ({}); starting fresh.",
+            cache.path,
+            e,
+        )
+        cache.clear()
+    return cache
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -71,12 +120,13 @@ def _is_retryable(exc: Exception) -> bool:
 def _setup_infisical_workload(
     settings: PsiSettings,
     workload_name: str,
+    cache_updates: dict[str, bytes],
 ) -> None:
     """Run Infisical-specific setup for a workload with retry."""
     last_exc: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            _fetch_and_register_infisical(settings, workload_name)
+            _fetch_and_register_infisical(settings, workload_name, cache_updates)
             return
         except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
             cause = e.__cause__ if isinstance(e, ProviderError) else e
@@ -100,8 +150,13 @@ def _setup_infisical_workload(
 def _fetch_and_register_infisical(
     settings: PsiSettings,
     workload_name: str,
+    cache_updates: dict[str, bytes],
 ) -> None:
-    """Fetch secrets from Infisical and register with Podman."""
+    """Fetch secrets from Infisical and register with Podman.
+
+    Populates ``cache_updates`` with ``{namespaced_name: value_bytes}`` so the
+    caller can flush the encrypted cache once all workloads are processed.
+    """
     from psi.providers.infisical import InfisicalProvider
     from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 
@@ -112,6 +167,7 @@ def _fetch_and_register_infisical(
 
     try:
         merged: dict[str, str] = {}
+        values: dict[str, bytes] = {}
         for source in workload.secrets:
             project = infisical_config.projects[source.project]
             auth = resolve_auth(project, infisical_config)
@@ -140,12 +196,18 @@ def _fetch_and_register_infisical(
                     actual_path,
                     key,
                 )
+                raw_value = secret.get("secretValue")
+                if raw_value is not None:
+                    values[key] = str(raw_value).encode("utf-8")
 
             logger.info("Found {} secrets", len(secrets))
 
         logger.info("Merged: {} unique secrets", len(merged))
         _register_secrets(settings, workload_name, merged)
         _generate_drop_in(settings, workload_name, merged)
+
+        for key, value in values.items():
+            cache_updates[f"{workload_name}--{key}"] = value
     finally:
         provider.close()
 

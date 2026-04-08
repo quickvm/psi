@@ -261,7 +261,7 @@ class TestSetupRetry:
     def test_retries_on_connect_error_then_succeeds(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name):
+        def mock_fetch(settings, workload_name, cache_updates):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
@@ -281,7 +281,7 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
         ):
-            _setup_infisical_workload(settings, "myapp")
+            _setup_infisical_workload(settings, "myapp", {})
 
         assert call_count == 3
 
@@ -304,7 +304,7 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(httpx.ConnectError, match="refused"),
         ):
-            _setup_infisical_workload(settings, "myapp")
+            _setup_infisical_workload(settings, "myapp", {})
 
     def test_non_retryable_error_raises_immediately(self, tmp_path: Path) -> None:
         request = httpx.Request("GET", "http://test")
@@ -328,4 +328,4 @@ class TestSetupRetry:
             ),
             pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
         ):
-            _setup_infisical_workload(settings, "myapp")
+            _setup_infisical_workload(settings, "myapp", {})

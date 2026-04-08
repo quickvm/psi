@@ -86,7 +86,7 @@ def _install_native(settings: PsiSettings, enable: bool) -> None:
 
     _write_unit(
         unit_dir / "psi-secrets.service",
-        generate_native_serve_service(psi_path, scope),
+        generate_native_serve_service(psi_path, scope, settings),
     )
 
     setup_units = _write_provider_setup_units_native(

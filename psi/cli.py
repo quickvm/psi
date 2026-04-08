@@ -31,6 +31,12 @@ systemd_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(systemd_app)
+cache_app = typer.Typer(
+    name="cache",
+    help="Encrypted secret cache management.",
+    no_args_is_help=True,
+)
+app.add_typer(cache_app)
 
 # Register provider subcommands
 from psi.providers.infisical.cli import infisical_app  # noqa: E402
@@ -185,6 +191,196 @@ def systemd_install(
 
     settings = load_settings(config, scope=detect_scope())
     install_systemd_units(settings, deploy_mode, image, enable)
+
+
+# --- Cache management commands ---
+
+
+@cache_app.command(name="init")
+def cache_init(
+    backend: Annotated[
+        str | None,
+        typer.Option(
+            "--backend",
+            help="Cache encryption backend: 'tpm' or 'hsm'. Required.",
+        ),
+    ] = None,
+    key_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--key-path",
+            help="Where to write the sealed TPM key (tpm backend only). "
+            "Default: <config_dir>/cache.key.",
+        ),
+    ] = None,
+    config: ConfigOption = None,
+) -> None:
+    """Provision the cache encryption key and write an empty cache file."""
+    import os
+    import subprocess
+
+    from psi.cache import Cache
+    from psi.cache_backends import HsmBackend, TpmBackend
+    from psi.errors import ConfigError
+    from psi.providers.nitrokeyhsm.models import NitrokeyHSMConfig
+
+    if backend is None:
+        console.print("Available backends: [bold]tpm[/bold], [bold]hsm[/bold]", highlight=False)
+        console.print("Re-run with --backend tpm or --backend hsm.", highlight=False)
+        raise typer.Exit(1)
+    if backend not in ("tpm", "hsm"):
+        raise ConfigError(f"Unknown cache backend: {backend!r}. Valid: 'tpm', 'hsm'.")
+
+    settings = load_settings(config, scope=detect_scope())
+    cache_path = settings.cache.resolve_path(settings.state_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if backend == "tpm":
+        raw_key = os.urandom(32)
+        target_key_path = key_path or (settings.config_dir / "cache.key")
+        target_key_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                [
+                    "systemd-creds",
+                    "encrypt",
+                    "--name=psi-cache-key",
+                    "--tpm2-pcrs=7",
+                    "-",
+                    str(target_key_path),
+                ],
+                input=raw_key,
+                check=True,
+            )
+        except FileNotFoundError as e:
+            msg = (
+                "systemd-creds not found. TPM backend requires systemd >= 250 "
+                "with TPM2 support. Install systemd-container or choose a different backend."
+            )
+            raise ConfigError(msg) from e
+        except subprocess.CalledProcessError as e:
+            msg = (
+                f"systemd-creds failed (exit {e.returncode}). "
+                "Check that this host has a TPM2 and the current user has access."
+            )
+            raise ConfigError(msg) from e
+
+        cache = Cache(cache_path, TpmBackend(key=raw_key))
+        cache.save()
+        console.print(
+            f"Sealed TPM key → [bold]{target_key_path}[/bold]\n"
+            f"Empty cache    → [bold]{cache_path}[/bold]\n"
+            f"Add this to the psi serve unit:\n"
+            f"  LoadCredentialEncrypted=psi-cache-key:{target_key_path}",
+            highlight=False,
+        )
+        return
+
+    # HSM backend
+    raw = settings.providers.get("nitrokeyhsm")
+    if not raw:
+        raise ConfigError(
+            "HSM cache backend requires providers.nitrokeyhsm to be configured. "
+            "Add a nitrokeyhsm provider block to your config and run 'psi nitrokeyhsm init' first.",
+        )
+    hsm_backend = HsmBackend(NitrokeyHSMConfig.model_validate(raw))
+    hsm_backend.open()
+    try:
+        cache = Cache(cache_path, hsm_backend)
+        cache.save()
+    finally:
+        hsm_backend.close()
+    console.print(
+        f"Empty cache → [bold]{cache_path}[/bold]\n"
+        "Cache will be unsealed via PKCS#11 at 'psi serve' startup.",
+        highlight=False,
+    )
+
+
+@cache_app.command(name="refresh")
+def cache_refresh(config: ConfigOption = None) -> None:
+    """Re-run setup to refresh every cached secret from providers."""
+    from psi.setup import run_setup
+
+    settings = load_settings(config, scope=detect_scope())
+    run_setup(settings)
+
+
+@cache_app.command(name="invalidate")
+def cache_invalidate(
+    secret_id: Annotated[str, typer.Argument(help="Namespaced secret ID to drop.")],
+    config: ConfigOption = None,
+) -> None:
+    """Drop a single entry from the cache and persist the change."""
+    from psi.cache import Cache
+    from psi.cache_backends import make_backend
+    from psi.errors import ConfigError
+
+    settings = load_settings(config, scope=detect_scope())
+    if not settings.cache.enabled or settings.cache.backend is None:
+        raise ConfigError("Cache is not enabled or has no backend configured.")
+
+    backend = make_backend(settings.cache.backend, settings)
+    open_method = getattr(backend, "open", None)
+    if callable(open_method):
+        open_method()
+    try:
+        cache = Cache(settings.cache.resolve_path(settings.state_dir), backend)
+        cache.load()
+        if cache.invalidate(secret_id):
+            cache.save()
+            console.print(f"Dropped [bold]{secret_id}[/bold] from cache.", highlight=False)
+        else:
+            console.print(f"No cache entry for [bold]{secret_id}[/bold].", highlight=False)
+    finally:
+        backend.close()
+
+
+@cache_app.command(name="status")
+def cache_status(config: ConfigOption = None) -> None:
+    """Print cache backend, entry count, and file metadata — never plaintext."""
+    import datetime as _dt
+
+    from psi.cache import Cache
+    from psi.cache_backends import make_backend
+
+    settings = load_settings(config, scope=detect_scope())
+    cache_path = settings.cache.resolve_path(settings.state_dir)
+
+    console.print(f"Cache path:    [bold]{cache_path}[/bold]", highlight=False)
+    console.print(
+        f"Enabled:       [bold]{settings.cache.enabled}[/bold]",
+        highlight=False,
+    )
+    console.print(
+        f"Backend:       [bold]{settings.cache.backend or '(none)'}[/bold]",
+        highlight=False,
+    )
+
+    if not cache_path.exists():
+        console.print("File:          [yellow]not provisioned[/yellow]", highlight=False)
+        return
+
+    stat = cache_path.stat()
+    mtime = _dt.datetime.fromtimestamp(stat.st_mtime, tz=_dt.UTC).isoformat()
+    console.print(f"File size:     [bold]{stat.st_size}[/bold] bytes", highlight=False)
+    console.print(f"Last written:  [bold]{mtime}[/bold]", highlight=False)
+
+    if not settings.cache.enabled or settings.cache.backend is None:
+        return
+
+    backend = make_backend(settings.cache.backend, settings)
+    open_method = getattr(backend, "open", None)
+    try:
+        if callable(open_method):
+            open_method()
+        cache = Cache(cache_path, backend)
+        cache.load()
+        console.print(f"Entries:       [bold]{len(cache)}[/bold]", highlight=False)
+    except Exception as e:
+        console.print(f"Entries:       [red]unreadable — {e}[/red]", highlight=False)
+    finally:
+        backend.close()
 
 
 def main() -> None:
