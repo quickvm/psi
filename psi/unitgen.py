@@ -201,28 +201,44 @@ def generate_driver_conf(scope: SystemdScope, token: str | None = None) -> str:
 def generate_native_serve_service(
     psi_path: str,
     scope: SystemdScope = SystemdScope.SYSTEM,
+    settings: PsiSettings | None = None,
 ) -> str:
-    """Generate psi-secrets.service for native mode."""
+    """Generate psi-secrets.service for native mode.
+
+    When ``settings.cache.backend == "tpm"``, the unit is emitted with
+    ``LoadCredentialEncrypted=psi-cache-key:<cache.key>`` so ``psi serve`` can
+    unseal the cache key at startup via ``$CREDENTIALS_DIRECTORY``.
+    """
     from psi.models import socket_path
 
     sock = socket_path(scope)
     runtime_dir = sock.parent
     wanted_by = "default.target" if scope == SystemdScope.USER else "multi-user.target"
-    return (
-        "[Unit]\n"
-        "Description=PSI secret lookup service\n"
-        "After=network-online.target\n"
-        "Wants=network-online.target\n"
-        "\n"
-        "[Service]\n"
-        "Type=simple\n"
-        "Restart=on-failure\n"
-        f"RuntimeDirectory={runtime_dir.name}\n"
-        f"ExecStart={psi_path} serve\n"
-        "\n"
-        "[Install]\n"
-        f"WantedBy={wanted_by}\n"
+
+    lines = [
+        "[Unit]",
+        "Description=PSI secret lookup service",
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        "Restart=on-failure",
+        f"RuntimeDirectory={runtime_dir.name}",
+        "StateDirectory=psi",
+    ]
+    if settings is not None and settings.cache.enabled and settings.cache.backend == "tpm":
+        key_path = settings.config_dir / "cache.key"
+        lines.append(f"LoadCredentialEncrypted=psi-cache-key:{key_path}")
+    lines.extend(
+        [
+            f"ExecStart={psi_path} serve",
+            "",
+            "[Install]",
+            f"WantedBy={wanted_by}",
+        ]
     )
+    return "\n".join(lines) + "\n"
 
 
 def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
@@ -255,18 +271,24 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
         lines.append(f"Volume={settings.ca_cert}:{ssl_target}:ro")
         lines.append(f"Environment=SSL_CERT_FILE={ssl_target}")
 
-    lines.extend(
+    service_lines = [
+        "",
+        "[Service]",
+        "Type=simple",
+        "Restart=on-failure",
+        f"RuntimeDirectory={runtime_dir.name}",
+    ]
+    if settings.cache.enabled and settings.cache.backend == "tpm":
+        key_path = settings.config_dir / "cache.key"
+        service_lines.append(f"LoadCredentialEncrypted=psi-cache-key:{key_path}")
+    service_lines.extend(
         [
-            "",
-            "[Service]",
-            "Type=simple",
-            "Restart=on-failure",
-            f"RuntimeDirectory={runtime_dir.name}",
             "",
             "[Install]",
             f"WantedBy={wanted_by}",
         ]
     )
+    lines.extend(service_lines)
     return "\n".join(lines) + "\n"
 
 

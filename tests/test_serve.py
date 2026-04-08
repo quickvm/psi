@@ -51,9 +51,15 @@ def _make_test_handler(
     tmp_path: Path,
     token: str | None,
     providers: dict | None = None,
+    cache: object | None = None,
 ) -> type:
     """Build a Handler class with a stubbed base."""
-    handler_cls = _make_handler(_settings(tmp_path), providers or {}, token)
+    handler_cls = _make_handler(
+        _settings(tmp_path),
+        providers or {},
+        token,
+        cache,  # ty: ignore[invalid-argument-type]
+    )
 
     class TestHandler(_FakeRequest, handler_cls):  # ty: ignore[unsupported-base]
         def __init__(self, path: str, headers: dict[str, str], body: bytes = b"") -> None:

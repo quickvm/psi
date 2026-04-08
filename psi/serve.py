@@ -18,6 +18,7 @@ from psi.secret import validate_secret_id
 from psi.token import resolve_socket_token
 
 if TYPE_CHECKING:
+    from psi.cache import Cache
     from psi.settings import PsiSettings
 
 
@@ -32,13 +33,14 @@ class _UnixHTTPServer(UnixStreamServer, HTTPServer):
 def run_serve(settings: PsiSettings, socket_path: str) -> None:
     """Start the lookup service on a Unix socket."""
     providers = open_all_providers(settings)
+    cache = _open_cache(settings)
     token = resolve_socket_token(settings)
     if token:
         logger.info("Socket auth enabled")
     else:
         logger.info("Socket auth disabled — no token configured")
     try:
-        handler = _make_handler(settings, providers, token)
+        handler = _make_handler(settings, providers, token, cache)
 
         if os.path.exists(socket_path):
             os.unlink(socket_path)
@@ -57,13 +59,64 @@ def run_serve(settings: PsiSettings, socket_path: str) -> None:
             if os.path.exists(socket_path):
                 os.unlink(socket_path)
     finally:
+        if cache is not None:
+            cache.close()
         close_all_providers(providers)
+
+
+def _open_cache(settings: PsiSettings) -> Cache | None:
+    """Construct, open, and load the secret cache.
+
+    Returns None (and logs a warning) on any failure — PSI continues to serve
+    live lookups so a missing cache key does not take down the fleet.
+    """
+    if not settings.cache.enabled:
+        logger.info("Secret cache disabled by config")
+        return None
+    if settings.cache.backend is None:
+        logger.warning(
+            "Secret cache is enabled but no backend is configured. "
+            "Run 'psi cache init --backend {tpm,hsm}' to provision one. "
+            "Falling back to live provider lookups."
+        )
+        return None
+
+    from psi.cache import Cache
+    from psi.cache_backends import make_backend
+
+    try:
+        backend = make_backend(settings.cache.backend, settings)
+        open_method = getattr(backend, "open", None)
+        if callable(open_method):
+            open_method()
+    except Exception as e:
+        logger.warning(
+            "Secret cache backend {} failed to open: {}. Falling back to live provider lookups.",
+            settings.cache.backend,
+            e,
+        )
+        return None
+
+    cache = Cache(settings.cache.resolve_path(settings.state_dir), backend)
+    try:
+        cache.load()
+    except Exception as e:
+        logger.warning(
+            "Secret cache at {} failed to load: {}. Falling back to live provider lookups.",
+            cache.path,
+            e,
+        )
+        cache.close()
+        return None
+    logger.info("Secret cache ready: {} entries from {}", len(cache), cache.path)
+    return cache
 
 
 def _make_handler(
     settings: PsiSettings,
     providers: dict,
     token: str | None,
+    cache: Cache | None,
 ) -> type[BaseHTTPRequestHandler]:
     """Create a request handler with access to settings and providers."""
 
@@ -171,16 +224,34 @@ def _make_handler(
                 secret_id=secret_id,
                 provider=provider_name,
             )
+
+            if cache is not None:
+                cached = cache.get(secret_id)
+                if cached is not None:
+                    self._respond(200, cached)
+                    audit.bind(outcome="success", source="cache").info("lookup")
+                    return
+
             try:
                 value = provider.lookup(mapping_data)
-                self._respond(200, value)
-                audit.bind(outcome="success").info("lookup")
             except PsiError as e:
                 audit.bind(outcome="error", error=str(e)).warning("lookup")
                 self._respond_error(502, "provider_error", str(e))
+                return
             except Exception as e:
                 audit.bind(outcome="error", error=str(e)).error("lookup")
                 self._respond_error(502, "internal_error", str(e))
+                return
+
+            if cache is not None:
+                try:
+                    cache.set(secret_id, value)
+                    cache.save()
+                except Exception as e:
+                    logger.warning("Failed to persist cache entry {}: {}", secret_id, e)
+
+            self._respond(200, value)
+            audit.bind(outcome="success", source="provider").info("lookup")
 
         def _handle_store(self, secret_id: str) -> None:
             if not secret_id:
