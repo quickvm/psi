@@ -74,15 +74,17 @@ psi/
 ├── __init__.py                          Version string
 ├── provider.py                          SecretProvider Protocol + registry + parse_mapping()
 ├── models.py                            Generic models (SystemdScope, WorkloadConfig, etc.)
-├── settings.py                          PsiSettings — YAML config with providers dict
+├── settings.py                          PsiSettings — YAML config; providers dict + CacheConfig
 ├── secret.py                            Shell driver commands (store/lookup/delete/list)
-├── serve.py                             HTTP server on Unix socket — dispatches to providers
-├── setup.py                             Boot-time orchestration — provider-aware
+├── serve.py                             HTTP server on Unix socket — dispatches to providers + cache
+├── setup.py                             Boot-time orchestration — provider-aware, populates cache
+├── cache.py                             Single-file encrypted cache (envelope + in-memory dict)
+├── cache_backends.py                    TPM (systemd-creds + AES-GCM) and HSM (PKCS#11) cache backends
 ├── output.py                            TTY-aware output (Rich tables or JSON)
-├── systemd.py                           Query systemd timer/unit status
+├── systemd.py                           Query systemd timer/unit status + daemon_reload helper
 ├── unitgen.py                           Generators for systemd unit/quadlet file contents
 ├── installer.py                         Orchestrate systemd unit installation
-├── cli.py                               Typer CLI — core commands + provider subcommands
+├── cli.py                               Typer CLI — core + provider + cache subcommands
 │
 ├── providers/
 │   ├── __init__.py                      Provider factory (create_provider)
@@ -113,9 +115,15 @@ cli.py → settings.py, setup.py, secret.py, installer.py
          providers/infisical/cli.py, providers/nitrokeyhsm/cli.py
 
 serve.py → provider.py (open_all_providers, parse_mapping, close_all_providers)
+serve.py → cache.py, cache_backends.py (Cache, make_backend — optional, degrades gracefully)
 secret.py → provider.py (get_provider, parse_mapping)
 setup.py → providers/infisical/ (InfisicalProvider, InfisicalConfig, resolve_auth)
+setup.py → cache.py, cache_backends.py (eager cache population when enabled)
+setup.py → systemd.py (daemon_reload helper, D-Bus-first fallback)
+installer.py → systemd.py (daemon_reload helper)
 provider.py → providers/__init__.py (create_provider)
+cache.py → files.py (write_bytes_secure for atomic writes)
+cache_backends.py → providers/nitrokeyhsm/ (crypto, pkcs11, pin — HSM backend reuses the provider)
 
 providers/infisical/__init__.py → providers/infisical/api.py, models.py
 providers/infisical/api.py → providers/infisical/auth.py, token.py
@@ -164,7 +172,7 @@ workloads:
   myapp:
     provider: infisical
     unit: myapp.container
-    depends_on: [psi-secrets-setup.service]
+    depends_on: [psi-infisical-setup.service]
     secrets:
       - project: myproject
         path: /myapp
@@ -173,7 +181,7 @@ workloads:
   windmill-worker@:
     provider: infisical
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill
   infisical:
     provider: nitrokeyhsm
@@ -187,6 +195,12 @@ psi serve                              Run the secret lookup service
 psi setup                              Discover secrets, register, generate drop-ins
 psi install                            Generate containers.conf.d/psi.conf
 psi systemd install                    Generate systemd units
+
+# Secret cache (optional)
+psi cache init --backend {tpm,hsm}     Provision cache encryption key
+psi cache status [--verify]            Show cache status (fast) or decrypt and count (slow)
+psi cache refresh                      Re-run setup to repopulate the cache
+psi cache invalidate <id>              Drop an entry and persist
 
 # Infisical provider
 psi infisical login                    Test authentication
