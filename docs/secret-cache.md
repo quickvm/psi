@@ -378,11 +378,22 @@ on cache miss at lookup time.
 
 ### Scheduled refresh (timer)
 
-`psi systemd install` generates a `psi-{provider}-setup.timer` next to
-each refreshable provider's setup service — today that means
-`psi-infisical-setup.timer`. The timer triggers the same setup unit that
-ran at boot, which re-fetches every configured secret value and
-atomically replaces `cache.enc`. Tune the cadence in config:
+`psi systemd install` generates two extra units per refreshable provider —
+today that means `infisical`:
+
+- `psi-infisical-refresh.service` — a native oneshot whose only job is
+  `ExecStart=/usr/bin/systemctl restart psi-infisical-setup.service`. This
+  wrapper exists because the setup unit uses `RemainAfterExit=yes`, which
+  freezes `ActiveEnterTimestamp` after the first run. A timer anchored
+  directly to the setup unit via `OnUnitActiveSec` would only fire once.
+  The wrapper is a normal oneshot so its own `ActiveEnterTimestamp` moves
+  forward every cycle, and `systemctl restart` makes the setup unit
+  re-run even when it is currently in `active (exited)` state.
+- `psi-infisical-refresh.timer` — triggers the wrapper on the configured
+  cadence. Each wrapper run re-fetches every configured secret value and
+  atomically replaces `cache.enc`.
+
+Tune the cadence in config:
 
 ```yaml
 cache:
@@ -405,10 +416,11 @@ The timer is only generated when `cache.enabled` is true and
 and no timer is written. The nitrokeyhsm provider does not get a timer —
 its secrets are local-only and do not need periodic re-fetching.
 
-To override the interval without editing config, drop a systemd override:
+To override the interval without editing config, drop a systemd override
+on the timer:
 
 ```bash
-sudo systemctl edit psi-infisical-setup.timer
+sudo systemctl edit psi-infisical-refresh.timer
 ```
 
 ```ini

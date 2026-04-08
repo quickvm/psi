@@ -16,7 +16,8 @@ from psi.unitgen import (
     generate_native_provider_setup_service,
     generate_native_serve_service,
     generate_native_tls_renew_service,
-    generate_provider_setup_timer,
+    generate_provider_refresh_service,
+    generate_provider_refresh_timer,
     generate_tls_renew_timer,
     provider_supports_refresh,
 )
@@ -455,27 +456,54 @@ class TestProviderRefreshSupport:
         assert provider_supports_refresh("random-name") is False
 
 
-class TestProviderSetupTimer:
-    def test_targets_matching_setup_unit(self) -> None:
-        content = generate_provider_setup_timer("infisical", "1h", "5m")
-        assert "Unit=psi-infisical-setup.service" in content
+class TestProviderRefreshService:
+    def test_is_oneshot_without_remain_after_exit(self) -> None:
+        """RemainAfterExit would break OnUnitActiveSec re-arming on the timer.
+
+        The wrapper MUST go inactive after each run so the timer's
+        OnUnitActiveSec has a moving ActiveEnterTimestamp to anchor to.
+        """
+        content = generate_provider_refresh_service("infisical")
+        assert "Type=oneshot" in content
+        assert "RemainAfterExit=yes" not in content
+
+    def test_execs_systemctl_restart_on_the_setup_unit(self) -> None:
+        """The wrapper restarts the setup unit so it re-runs even when it is
+        currently in active (exited) state from the previous run.
+        """
+        content = generate_provider_refresh_service("infisical")
+        assert "ExecStart=/usr/bin/systemctl restart psi-infisical-setup.service" in content
+
+    def test_orders_after_setup_unit(self) -> None:
+        content = generate_provider_refresh_service("infisical")
+        assert "After=psi-infisical-setup.service" in content
+
+
+class TestProviderRefreshTimer:
+    def test_targets_the_refresh_wrapper_not_the_setup_unit(self) -> None:
+        """Regression test for PR #20's broken timer — it pointed directly at
+        the setup unit whose ActiveEnterTimestamp never updated.
+        """
+        content = generate_provider_refresh_timer("infisical", "1h", "5m")
+        assert "Unit=psi-infisical-refresh.service" in content
+        assert "Unit=psi-infisical-setup.service" not in content
 
     def test_interval_and_randomized_delay_are_passed_through(self) -> None:
-        content = generate_provider_setup_timer("infisical", "30m", "2m")
+        content = generate_provider_refresh_timer("infisical", "30m", "2m")
         assert "OnUnitActiveSec=30m" in content
         assert "OnBootSec=30m" in content
         assert "RandomizedDelaySec=2m" in content
 
     def test_is_persistent_so_missed_refreshes_run_on_next_boot(self) -> None:
-        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        content = generate_provider_refresh_timer("infisical", "1h", "5m")
         assert "Persistent=true" in content
 
     def test_install_section_hooks_into_timers_target(self) -> None:
-        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        content = generate_provider_refresh_timer("infisical", "1h", "5m")
         assert "[Install]" in content
         assert "WantedBy=timers.target" in content
 
     def test_description_mentions_cache_refresh(self) -> None:
-        content = generate_provider_setup_timer("infisical", "1h", "5m")
+        content = generate_provider_refresh_timer("infisical", "1h", "5m")
         assert "Description=" in content
         assert "cache refresh" in content.lower()

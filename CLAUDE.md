@@ -201,8 +201,11 @@ psi cache init --backend {tpm,hsm}     Provision cache encryption key
 psi cache status [--verify]            Show cache status (fast) or decrypt and count (slow)
 psi cache refresh                      Re-run setup to repopulate the cache
 psi cache invalidate <id>              Drop an entry and persist
-# A psi-{provider}-setup.timer is auto-generated on `psi systemd install`
-# when cache.backend is set; cadence via cache.refresh_interval (default 1h).
+# A psi-{provider}-refresh.timer + wrapper service pair is auto-generated on
+# `psi systemd install` when cache.backend is set; cadence via
+# cache.refresh_interval (default 1h). The wrapper calls `systemctl restart`
+# on the setup unit because its RemainAfterExit=yes freezes
+# ActiveEnterTimestamp, which would otherwise break the timer's re-arming.
 
 # Infisical provider
 psi infisical login                    Test authentication
