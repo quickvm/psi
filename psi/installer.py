@@ -11,6 +11,7 @@ from loguru import logger
 
 from psi.files import write_text_secure
 from psi.models import DeployMode, SystemdScope
+from psi.systemd import daemon_reload
 from psi.unitgen import (
     generate_container_provider_setup_quadlet,
     generate_container_serve_quadlet,
@@ -210,13 +211,8 @@ def _ensure_dir(path: Path) -> None:
 
 
 def _daemon_reload(scope: SystemdScope) -> None:
-    """Run systemctl daemon-reload."""
-    cmd = ["systemctl"]
-    if scope == SystemdScope.USER:
-        cmd.append("--user")
-    cmd.append("daemon-reload")
-    subprocess.run(cmd, check=True)
-    logger.info("Reloaded systemd.")
+    """Reload systemd via the shared D-Bus-first helper."""
+    daemon_reload(scope)
 
 
 def _enable_units(
