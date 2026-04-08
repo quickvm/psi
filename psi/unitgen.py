@@ -16,6 +16,68 @@ if TYPE_CHECKING:
     from psi.settings import PsiSettings
 
 
+def _cache_hsm_container_lines(config_dir: Path, unit_name: str) -> tuple[list[str], list[str]]:
+    """Return (container_lines, service_lines) to wire HSM access into a quadlet.
+
+    Adds the pcscd socket volume and the ``hsm-pin`` systemd credential so a
+    container running inside the quadlet can open a PKCS#11 session and
+    resolve the PIN via ``$CREDENTIALS_DIRECTORY``.
+
+    Args:
+        config_dir: Unused today (reserved for future PIN path customization).
+        unit_name: Systemd service name (e.g. ``psi-secrets.service``),
+            needed because ``LoadCredentialEncrypted`` places the decrypted
+            credential under ``/run/credentials/<unit_name>/``.
+
+    Returns:
+        Tuple of lines to append to ``[Container]`` and ``[Service]``.
+    """
+    del config_dir  # currently unused — PIN path is fixed by the PSI convention
+    container = [
+        "Volume=pcscd-socket:/run/pcscd:rw",
+        f"Volume=/run/credentials/{unit_name}:/run/credentials:ro",
+        "Environment=CREDENTIALS_DIRECTORY=/run/credentials",
+    ]
+    service = ["LoadCredentialEncrypted=hsm-pin"]
+    return container, service
+
+
+def _cache_tpm_container_lines(config_dir: Path, unit_name: str) -> tuple[list[str], list[str]]:
+    """Return (container_lines, service_lines) to wire a TPM-sealed cache key.
+
+    Same pattern as :func:`_cache_hsm_container_lines`: the sealed key file on
+    the host is delivered via ``LoadCredentialEncrypted`` and mounted read-only
+    into the container at a path exposed through ``$CREDENTIALS_DIRECTORY``.
+    """
+    key_path = config_dir / "cache.key"
+    container = [
+        f"Volume=/run/credentials/{unit_name}:/run/credentials:ro",
+        "Environment=CREDENTIALS_DIRECTORY=/run/credentials",
+    ]
+    service = [f"LoadCredentialEncrypted=psi-cache-key:{key_path}"]
+    return container, service
+
+
+def _cache_quadlet_extras(
+    settings: PsiSettings,
+    unit_name: str,
+) -> tuple[list[str], list[str], bool]:
+    """Return ``[Container]``/``[Service]`` extras needed by the configured cache.
+
+    The third element is True when the caller should add
+    ``After=pcscd.service`` to the ``[Unit]`` section (HSM backend only).
+    """
+    if not settings.cache.enabled or settings.cache.backend is None:
+        return [], [], False
+    if settings.cache.backend == "hsm":
+        c, s = _cache_hsm_container_lines(settings.config_dir, unit_name)
+        return c, s, True
+    if settings.cache.backend == "tpm":
+        c, s = _cache_tpm_container_lines(settings.config_dir, unit_name)
+        return c, s, False
+    return [], [], False
+
+
 def generate_native_provider_setup_service(
     psi_path: str,
     provider: str,
@@ -81,7 +143,13 @@ def generate_container_provider_setup_quadlet(
     settings: PsiSettings,
     provider: str,
 ) -> str:
-    """Generate psi-{provider}-setup.container quadlet."""
+    """Generate psi-{provider}-setup.container quadlet.
+
+    When ``settings.cache`` is enabled with an HSM or TPM backend, the setup
+    container needs the same unseal wiring as the serve container — the
+    setup path fetches secret values and writes them to the encrypted cache,
+    which requires provider-side key access at setup time.
+    """
     state = settings.state_dir
     systemd = settings.systemd_dir
     config_dir = settings.config_dir
@@ -89,9 +157,16 @@ def generate_container_provider_setup_quadlet(
     podman_socket = _podman_socket_path(settings.scope)
     wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
     needs_network = provider == "infisical"
-    after = "psi-secrets.service"
+    unit_name = f"psi-{provider}-setup.service"
+
+    cache_container, cache_service, needs_pcscd = _cache_quadlet_extras(settings, unit_name)
+
+    after_parts = ["psi-secrets.service"]
     if needs_network:
-        after = f"network-online.target {after}"
+        after_parts.insert(0, "network-online.target")
+    if needs_pcscd:
+        after_parts.append("pcscd.service")
+    after = " ".join(after_parts)
 
     lines = [
         "[Unit]",
@@ -122,12 +197,19 @@ def generate_container_provider_setup_quadlet(
         lines.append(f"Volume={settings.ca_cert}:{ssl_target}:ro")
         lines.append(f"Environment=SSL_CERT_FILE={ssl_target}")
 
+    lines.extend(cache_container)
+
     lines.extend(
         [
             "",
             "[Service]",
             "Type=oneshot",
             "RemainAfterExit=yes",
+        ]
+    )
+    lines.extend(cache_service)
+    lines.extend(
+        [
             "",
             "[Install]",
             f"WantedBy={wanted_by}",
@@ -250,11 +332,19 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
     sock = socket_path(settings.scope)
     runtime_dir = sock.parent
     wanted_by = "default.target" if settings.scope == SystemdScope.USER else "multi-user.target"
+    unit_name = "psi-secrets.service"
+
+    cache_container, cache_service, needs_pcscd = _cache_quadlet_extras(settings, unit_name)
+
+    after_parts = ["network-online.target"]
+    if needs_pcscd:
+        after_parts.append("pcscd.service")
+    after = " ".join(after_parts)
 
     lines = [
         "[Unit]",
         "Description=PSI secret lookup service",
-        "After=network-online.target",
+        f"After={after}",
         "Wants=network-online.target",
         "",
         "[Container]",
@@ -271,24 +361,25 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
         lines.append(f"Volume={settings.ca_cert}:{ssl_target}:ro")
         lines.append(f"Environment=SSL_CERT_FILE={ssl_target}")
 
-    service_lines = [
-        "",
-        "[Service]",
-        "Type=simple",
-        "Restart=on-failure",
-        f"RuntimeDirectory={runtime_dir.name}",
-    ]
-    if settings.cache.enabled and settings.cache.backend == "tpm":
-        key_path = settings.config_dir / "cache.key"
-        service_lines.append(f"LoadCredentialEncrypted=psi-cache-key:{key_path}")
-    service_lines.extend(
+    lines.extend(cache_container)
+
+    lines.extend(
+        [
+            "",
+            "[Service]",
+            "Type=simple",
+            "Restart=on-failure",
+            f"RuntimeDirectory={runtime_dir.name}",
+        ]
+    )
+    lines.extend(cache_service)
+    lines.extend(
         [
             "",
             "[Install]",
             f"WantedBy={wanted_by}",
         ]
     )
-    lines.extend(service_lines)
     return "\n".join(lines) + "\n"
 
 
