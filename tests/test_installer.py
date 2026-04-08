@@ -13,6 +13,7 @@ from psi.installer import (
     _systemd_unit_dir,
     _write_provider_setup_units_container,
     _write_provider_setup_units_native,
+    _write_refresh_timers,
     install_driver_conf,
 )
 from psi.models import SystemdScope
@@ -22,6 +23,10 @@ def _mock_settings(
     tmp_path: Path,
     scope: SystemdScope = SystemdScope.SYSTEM,
     providers: dict | None = None,
+    cache_backend: str | None = None,
+    cache_enabled: bool = True,
+    refresh_interval: str = "1h",
+    refresh_randomized_delay: str = "5m",
 ) -> MagicMock:
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
@@ -35,6 +40,10 @@ def _mock_settings(
         settings.config_dir = Path.home() / ".config/psi"
     else:
         settings.config_dir = Path("/etc/psi")
+    settings.cache.enabled = cache_enabled
+    settings.cache.backend = cache_backend
+    settings.cache.refresh_interval = refresh_interval
+    settings.cache.refresh_randomized_delay = refresh_randomized_delay
     return settings
 
 
@@ -175,3 +184,75 @@ class TestPerProviderSetupUnits:
         content = (quadlet_dir / "psi-infisical-setup.container").read_text()
         assert "Exec=setup --provider infisical" in content
         assert "network-online.target" in content
+
+
+class TestWriteRefreshTimers:
+    def test_infisical_timer_written_when_cache_enabled_with_backend(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}, "nitrokeyhsm": {}},
+            cache_backend="hsm",
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        timers = _write_refresh_timers(settings, unit_dir)
+        assert timers == ["psi-infisical-setup.timer"]
+        assert (unit_dir / "psi-infisical-setup.timer").exists()
+        content = (unit_dir / "psi-infisical-setup.timer").read_text()
+        assert "Unit=psi-infisical-setup.service" in content
+        assert "OnUnitActiveSec=1h" in content
+
+    def test_no_timer_when_cache_disabled(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}},
+            cache_backend="hsm",
+            cache_enabled=False,
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        timers = _write_refresh_timers(settings, unit_dir)
+        assert timers == []
+        assert not (unit_dir / "psi-infisical-setup.timer").exists()
+
+    def test_no_timer_when_no_backend(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}},
+            cache_backend=None,
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        timers = _write_refresh_timers(settings, unit_dir)
+        assert timers == []
+
+    def test_no_timer_for_nitrokeyhsm_provider(self, tmp_path: Path) -> None:
+        """HSM is local-only — nothing to periodically re-fetch."""
+        settings = _mock_settings(
+            tmp_path,
+            providers={"nitrokeyhsm": {}},
+            cache_backend="hsm",
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        timers = _write_refresh_timers(settings, unit_dir)
+        assert timers == []
+        assert not (unit_dir / "psi-nitrokeyhsm-setup.timer").exists()
+
+    def test_custom_interval_is_honored(self, tmp_path: Path) -> None:
+        settings = _mock_settings(
+            tmp_path,
+            providers={"infisical": {}},
+            cache_backend="tpm",
+            refresh_interval="15m",
+            refresh_randomized_delay="1m",
+        )
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        _write_refresh_timers(settings, unit_dir)
+        content = (unit_dir / "psi-infisical-setup.timer").read_text()
+        assert "OnUnitActiveSec=15m" in content
+        assert "RandomizedDelaySec=1m" in content

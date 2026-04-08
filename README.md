@@ -177,12 +177,18 @@ memory — upstream provider outages no longer stop containers from starting.
 ```yaml
 cache:
   enabled: true
-  backend: hsm       # 'tpm' or 'hsm'. Required for the cache to populate.
+  backend: hsm                   # 'tpm' or 'hsm'. Required for the cache to populate.
+  refresh_interval: 1h           # how often the scheduled timer re-pulls secrets
+  refresh_randomized_delay: 5m   # spread refreshes across a fleet
 ```
 
 The TPM backend uses a 32-byte AES-256 key sealed by `systemd-creds` to the host TPM2.
 The HSM backend reuses the existing Nitrokey hybrid envelope (RSA-OAEP + AES-256-GCM),
 unwrapping the AES key via PKCS#11 at `psi serve` startup.
+
+With the cache enabled, `psi systemd install` also generates a periodic refresh timer
+(`psi-infisical-setup.timer`) that runs the setup unit on `refresh_interval`, so a
+secret rotated upstream makes its way into PSI without manual intervention.
 
 ```bash
 # One-time provisioning (host)
@@ -499,6 +505,10 @@ psi cache refresh                Re-run setup to repopulate the cache from provi
 psi cache invalidate <id>        Drop a single entry and persist the change
 ```
 
+The cache is also refreshed automatically by `psi-infisical-setup.timer` on the
+`cache.refresh_interval` cadence (default `1h`). `psi cache refresh` is only needed
+for out-of-band rotations that cannot wait for the next scheduled run.
+
 See the [secret cache reference](docs/secret-cache.md) for full documentation.
 
 ### Infisical provider
@@ -592,6 +602,7 @@ the exact invocation.
 Generates per-provider setup units based on configured providers:
 - `psi-secrets.container` — long-running lookup service
 - `psi-{provider}-setup.container` — oneshot per provider (e.g. `psi-infisical-setup`, `psi-nitrokeyhsm-setup`)
+- `psi-infisical-setup.timer` — periodic cache refresh (only when the secret cache is enabled)
 - `psi-tls-renew.timer` + service — daily TLS renewal (if configured)
 
 When the [secret cache](docs/secret-cache.md) is configured, the generator automatically
