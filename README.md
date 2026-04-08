@@ -10,7 +10,7 @@ Built for [Fedora CoreOS](https://fedoraproject.org/coreos/) but works anywhere 
 | Provider | How it works | Use case |
 |----------|-------------|----------|
 | **Infisical** | Fetches secrets from an [Infisical](https://infisical.com) instance at lookup time | Primary secret management for all services |
-| **Nitrokey HSM** | Encrypts secrets at store time and decrypts via a [Nitrokey HSM](https://www.nitrokey.com/products/nitrokey-hsm-2) at lookup time | Bootstrap secrets that can't come from a secrets manager (e.g. Infisical's own credentials) |
+| **Nitrokey HSM** | Encrypts secrets at store time and decrypts via a [Nitrokey HSM](https://www.nitrokey.com/products/nitrokeys) at lookup time | Bootstrap secrets that can't come from a secrets manager (e.g. Infisical's own credentials) |
 
 Both providers run behind a single PSI serve process. Podman doesn't know or care which provider
 handles a given secret — the JSON mapping stored in the state directory includes a `provider` field
