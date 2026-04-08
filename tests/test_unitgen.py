@@ -419,3 +419,24 @@ class TestQuadletTranslatability:
         settings = _mock_settings(tmp_path)
         content = generate_container_tls_renew_quadlet("psi:latest", settings)
         assert "ContainerName=psi-tls-renew" in content
+
+    def test_serve_quadlet_has_security_label_type(self, tmp_path: Path) -> None:
+        """Without SecurityLabelType=container_runtime_t the container cannot
+        read /etc/psi/config.yaml from the host without a :Z relabel, which we
+        do not want on shared config directories.
+        """
+        settings = _mock_settings(tmp_path)
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "SecurityLabelType=container_runtime_t" in content
+
+    def test_serve_quadlet_has_notify_healthy(self, tmp_path: Path) -> None:
+        """Quadlet emits Type=notify by default and expects an sd_notify ready
+        signal. Notify=healthy makes podman send it once the healthcheck first
+        passes. Without this the unit hangs in 'activating' until TimeoutStartSec.
+        """
+        settings = _mock_settings(tmp_path)
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "Notify=healthy" in content
+        assert "HealthCmd=curl -sf --unix-socket " in content
+        assert "http://localhost/healthz" in content
+        assert "HealthStartPeriod=60s" in content
