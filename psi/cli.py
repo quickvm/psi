@@ -336,12 +336,29 @@ def cache_invalidate(
         backend.close()
 
 
+_BACKEND_TAG_NAMES = {0x01: "tpm", 0x02: "hsm"}
+
+
 @cache_app.command(name="status")
-def cache_status(config: ConfigOption = None) -> None:
-    """Print cache backend, entry count, and file metadata — never plaintext."""
+def cache_status(
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Decrypt the cache and report the entry count. Requires HSM/TPM access.",
+        ),
+    ] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Print cache backend and file metadata.
+
+    The default fast path reads only config + file header — no crypto, no HSM
+    session, no TPM unseal. Use ``--verify`` to decrypt the cache and report
+    the entry count; this takes as long as a full provider open.
+    """
     import datetime as _dt
 
-    from psi.cache import Cache
+    from psi.cache import Cache, CacheError, read_header
     from psi.cache_backends import make_backend
 
     settings = load_settings(config, scope=detect_scope())
@@ -366,7 +383,30 @@ def cache_status(config: ConfigOption = None) -> None:
     console.print(f"File size:     [bold]{stat.st_size}[/bold] bytes", highlight=False)
     console.print(f"Last written:  [bold]{mtime}[/bold]", highlight=False)
 
+    try:
+        version, backend_tag = read_header(cache_path)
+    except CacheError as e:
+        console.print(f"Header:        [red]{e}[/red]", highlight=False)
+        return
+
+    tag_name = _BACKEND_TAG_NAMES.get(backend_tag, f"unknown ({backend_tag:#x})")
+    console.print(
+        f"On-disk tag:   [bold]{tag_name}[/bold] (version {version})",
+        highlight=False,
+    )
+
+    if not verify:
+        console.print(
+            "Entries:       [dim]not counted (pass --verify to decrypt)[/dim]",
+            highlight=False,
+        )
+        return
+
     if not settings.cache.enabled or settings.cache.backend is None:
+        console.print(
+            "Entries:       [red]cannot verify — no backend configured[/red]",
+            highlight=False,
+        )
         return
 
     backend = make_backend(settings.cache.backend, settings)

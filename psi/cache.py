@@ -58,6 +58,31 @@ class CacheError(ProviderError):
         super().__init__(message, provider_name="cache")
 
 
+def read_header(path: Path) -> tuple[int, int]:
+    """Read the envelope header without decrypting the payload.
+
+    Used by ``psi cache status`` to report the on-disk version and backend tag
+    without opening an HSM session or reading the TPM credential. Fast path —
+    no crypto, no provider interaction.
+
+    Returns:
+        ``(version, backend_tag)`` as read from the file.
+
+    Raises:
+        CacheError: If the file is too short or has bad magic.
+    """
+    with path.open("rb") as f:
+        raw = f.read(_HEADER_SIZE)
+    if len(raw) < _HEADER_SIZE:
+        msg = f"Cache file {path} is too short to contain a header"
+        raise CacheError(msg)
+    magic, version, backend_tag = struct.unpack(_HEADER_FMT, raw)
+    if magic != MAGIC:
+        msg = f"Cache file {path} has bad magic {magic!r}, expected {MAGIC!r}"
+        raise CacheError(msg)
+    return version, backend_tag
+
+
 class Cache:
     """Single-file encrypted cache of secret values.
 

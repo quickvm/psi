@@ -10,9 +10,11 @@ from psi.providers.infisical.models import CertificateConfig, CertOutput, TlsCon
 from psi.unitgen import (
     collect_tls_volume_dirs,
     generate_container_provider_setup_quadlet,
+    generate_container_serve_quadlet,
     generate_container_tls_renew_quadlet,
     generate_driver_conf,
     generate_native_provider_setup_service,
+    generate_native_serve_service,
     generate_native_tls_renew_service,
     generate_tls_renew_timer,
 )
@@ -22,6 +24,8 @@ def _mock_settings(
     tmp_path: Path,
     tls: TlsConfig | None = None,
     scope: SystemdScope = SystemdScope.SYSTEM,
+    cache_backend: str | None = None,
+    cache_enabled: bool = True,
 ) -> MagicMock:
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
@@ -38,6 +42,8 @@ def _mock_settings(
         settings.config_dir = Path.home() / ".config/psi"
     else:
         settings.config_dir = Path("/etc/psi")
+    settings.cache.enabled = cache_enabled
+    settings.cache.backend = cache_backend
     return settings
 
 
@@ -297,3 +303,81 @@ class TestUserScopeGenerators:
         content = generate_driver_conf(SystemdScope.USER)
         assert "psi.sock" in content
         assert "/run/psi/" not in content
+
+
+class TestCacheWiring:
+    """Quadlet/service generators propagate cache backend requirements."""
+
+    def test_setup_quadlet_no_cache_backend_is_untouched(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend=None)
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "pcscd-socket" not in content
+        assert "hsm-pin" not in content
+        assert "psi-cache-key" not in content
+        assert "CREDENTIALS_DIRECTORY" not in content
+        assert "pcscd.service" not in content
+
+    def test_setup_quadlet_cache_disabled_is_untouched(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="hsm", cache_enabled=False)
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "pcscd-socket" not in content
+        assert "hsm-pin" not in content
+
+    def test_setup_quadlet_hsm_wires_pcscd_and_pin(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="hsm")
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "Volume=pcscd-socket:/run/pcscd:rw" in content
+        assert "Volume=/run/credentials/psi-infisical-setup.service:/run/credentials:ro" in content
+        assert "Environment=CREDENTIALS_DIRECTORY=/run/credentials" in content
+        assert "LoadCredentialEncrypted=hsm-pin" in content
+        assert "After=network-online.target psi-secrets.service pcscd.service" in content
+
+    def test_setup_quadlet_tpm_wires_cache_key_only(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="tpm")
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "LoadCredentialEncrypted=psi-cache-key:/etc/psi/cache.key" in content
+        assert "Environment=CREDENTIALS_DIRECTORY=/run/credentials" in content
+        assert "pcscd-socket" not in content
+        assert "hsm-pin" not in content
+        assert "pcscd.service" not in content
+
+    def test_serve_quadlet_hsm_wires_pcscd_and_pin(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="hsm")
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "Volume=pcscd-socket:/run/pcscd:rw" in content
+        assert "Volume=/run/credentials/psi-secrets.service:/run/credentials:ro" in content
+        assert "Environment=CREDENTIALS_DIRECTORY=/run/credentials" in content
+        assert "LoadCredentialEncrypted=hsm-pin" in content
+        assert "After=network-online.target pcscd.service" in content
+
+    def test_serve_quadlet_tpm_wires_cache_key(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="tpm")
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "LoadCredentialEncrypted=psi-cache-key:/etc/psi/cache.key" in content
+        assert "pcscd-socket" not in content
+
+    def test_serve_quadlet_no_cache_is_untouched(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend=None)
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "pcscd-socket" not in content
+        assert "hsm-pin" not in content
+        assert "psi-cache-key" not in content
+
+    def test_native_serve_tpm_adds_credential(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path, cache_backend="tpm")
+        content = generate_native_serve_service("/usr/bin/psi", SystemdScope.SYSTEM, settings)
+        assert "LoadCredentialEncrypted=psi-cache-key:/etc/psi/cache.key" in content
+        assert "StateDirectory=psi" in content
+
+    def test_native_serve_hsm_does_not_add_cache_key(self, tmp_path: Path) -> None:
+        # Native serve unit does not wire HSM access (HSM support in native mode
+        # is an open question — for now the generator just skips the credential).
+        settings = _mock_settings(tmp_path, cache_backend="hsm")
+        content = generate_native_serve_service("/usr/bin/psi", SystemdScope.SYSTEM, settings)
+        assert "psi-cache-key" not in content
+        assert "StateDirectory=psi" in content
+
+    def test_native_serve_no_settings_is_safe(self) -> None:
+        content = generate_native_serve_service("/usr/bin/psi", SystemdScope.SYSTEM)
+        assert "psi-cache-key" not in content
+        assert "StateDirectory=psi" in content
