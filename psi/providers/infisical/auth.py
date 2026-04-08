@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import TYPE_CHECKING
 
+import httpx
+
+from psi.errors import ProviderError
 from psi.providers.infisical.models import AuthConfig, AuthMethod
-
-if TYPE_CHECKING:
-    import httpx
 
 # STS endpoint for AWS IAM auth — global endpoint works from any region
 _AWS_STS_ENDPOINT = "https://sts.amazonaws.com"
@@ -51,7 +50,12 @@ def authenticate(
 
 def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Extract access token and expiry from Infisical auth response."""
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        body = e.response.text[:200]
+        msg = f"Infisical authentication failed (HTTP {e.response.status_code}): {body}"
+        raise ProviderError(msg, provider_name="infisical") from e
     data = response.json()
     return data["accessToken"], int(data["expiresIn"])
 
