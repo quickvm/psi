@@ -8,10 +8,12 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from psi.errors import ProviderError
 from psi.models import SecretSource, SystemdScope, WorkloadConfig
 from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
 from psi.setup import (
+    _RETRY_DELAYS,
     _generate_drop_in,
     _is_retryable,
     _setup_infisical_workload,
@@ -274,3 +276,70 @@ class TestSetupRetry:
             pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
         ):
             _setup_infisical_workload(settings, "myapp", {})
+
+    def test_auth_502_retries_then_raises_provider_error(self, tmp_path: Path) -> None:
+        """Auth endpoint 502 wrapped as ProviderError is retried via __cause__."""
+        request = httpx.Request("POST", "http://test/api/v1/auth/universal-auth/login")
+        response = httpx.Response(502, request=request)
+        call_count = 0
+
+        def mock_fetch(settings, workload_name, cache_updates):
+            nonlocal call_count
+            call_count += 1
+            http_err = httpx.HTTPStatusError("502", request=request, response=response)
+            raise ProviderError(
+                "Infisical authentication failed (HTTP 502): ...",
+                provider_name="infisical",
+            ) from http_err
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.time.sleep"),
+            pytest.raises(ProviderError, match="authentication failed"),
+        ):
+            _setup_infisical_workload(settings, "myapp", {})
+
+        assert call_count == len(_RETRY_DELAYS) + 1
+
+    def test_auth_401_wrapped_as_provider_error_not_retried(self, tmp_path: Path) -> None:
+        """Auth 401 wrapped as ProviderError is non-retryable — fails immediately."""
+        request = httpx.Request("POST", "http://test/api/v1/auth/universal-auth/login")
+        response = httpx.Response(401, request=request)
+        call_count = 0
+
+        def mock_fetch(settings, workload_name, cache_updates):
+            nonlocal call_count
+            call_count += 1
+            http_err = httpx.HTTPStatusError("401", request=request, response=response)
+            raise ProviderError(
+                "Infisical authentication failed (HTTP 401): invalid credentials",
+                provider_name="infisical",
+            ) from http_err
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            pytest.raises(ProviderError, match="invalid credentials"),
+        ):
+            _setup_infisical_workload(settings, "myapp", {})
+
+        assert call_count == 1

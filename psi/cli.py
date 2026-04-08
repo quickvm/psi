@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -434,6 +435,9 @@ def main() -> None:
         raise SystemExit(1) from e
     except ValidationError as e:
         _print_validation_error(e)
+        raise SystemExit(1) from e
+    except httpx.HTTPError as e:
+        _print_error(f"Network error: {e}")
         raise SystemExit(1) from e
     except Exception as e:
         _print_bug()
