@@ -187,7 +187,7 @@ class TestPerProviderSetupUnits:
 
 
 class TestWriteRefreshTimers:
-    def test_infisical_timer_written_when_cache_enabled_with_backend(
+    def test_wrapper_and_timer_written_when_cache_enabled_with_backend(
         self,
         tmp_path: Path,
     ) -> None:
@@ -199,13 +199,23 @@ class TestWriteRefreshTimers:
         unit_dir = tmp_path / "units"
         unit_dir.mkdir()
         timers = _write_refresh_timers(settings, unit_dir)
-        assert timers == ["psi-infisical-setup.timer"]
-        assert (unit_dir / "psi-infisical-setup.timer").exists()
-        content = (unit_dir / "psi-infisical-setup.timer").read_text()
-        assert "Unit=psi-infisical-setup.service" in content
-        assert "OnUnitActiveSec=1h" in content
+        assert timers == ["psi-infisical-refresh.timer"]
 
-    def test_no_timer_when_cache_disabled(self, tmp_path: Path) -> None:
+        wrapper = unit_dir / "psi-infisical-refresh.service"
+        timer = unit_dir / "psi-infisical-refresh.timer"
+        assert wrapper.exists()
+        assert timer.exists()
+
+        wrapper_content = wrapper.read_text()
+        assert "Type=oneshot" in wrapper_content
+        assert "RemainAfterExit=yes" not in wrapper_content
+        assert "systemctl restart psi-infisical-setup.service" in wrapper_content
+
+        timer_content = timer.read_text()
+        assert "Unit=psi-infisical-refresh.service" in timer_content
+        assert "OnUnitActiveSec=1h" in timer_content
+
+    def test_no_units_when_cache_disabled(self, tmp_path: Path) -> None:
         settings = _mock_settings(
             tmp_path,
             providers={"infisical": {}},
@@ -216,9 +226,10 @@ class TestWriteRefreshTimers:
         unit_dir.mkdir()
         timers = _write_refresh_timers(settings, unit_dir)
         assert timers == []
-        assert not (unit_dir / "psi-infisical-setup.timer").exists()
+        assert not (unit_dir / "psi-infisical-refresh.service").exists()
+        assert not (unit_dir / "psi-infisical-refresh.timer").exists()
 
-    def test_no_timer_when_no_backend(self, tmp_path: Path) -> None:
+    def test_no_units_when_no_backend(self, tmp_path: Path) -> None:
         settings = _mock_settings(
             tmp_path,
             providers={"infisical": {}},
@@ -228,8 +239,9 @@ class TestWriteRefreshTimers:
         unit_dir.mkdir()
         timers = _write_refresh_timers(settings, unit_dir)
         assert timers == []
+        assert not (unit_dir / "psi-infisical-refresh.service").exists()
 
-    def test_no_timer_for_nitrokeyhsm_provider(self, tmp_path: Path) -> None:
+    def test_no_units_for_nitrokeyhsm_provider(self, tmp_path: Path) -> None:
         """HSM is local-only — nothing to periodically re-fetch."""
         settings = _mock_settings(
             tmp_path,
@@ -240,7 +252,7 @@ class TestWriteRefreshTimers:
         unit_dir.mkdir()
         timers = _write_refresh_timers(settings, unit_dir)
         assert timers == []
-        assert not (unit_dir / "psi-nitrokeyhsm-setup.timer").exists()
+        assert not (unit_dir / "psi-nitrokeyhsm-refresh.service").exists()
 
     def test_custom_interval_is_honored(self, tmp_path: Path) -> None:
         settings = _mock_settings(
@@ -253,6 +265,6 @@ class TestWriteRefreshTimers:
         unit_dir = tmp_path / "units"
         unit_dir.mkdir()
         _write_refresh_timers(settings, unit_dir)
-        content = (unit_dir / "psi-infisical-setup.timer").read_text()
+        content = (unit_dir / "psi-infisical-refresh.timer").read_text()
         assert "OnUnitActiveSec=15m" in content
         assert "RandomizedDelaySec=1m" in content

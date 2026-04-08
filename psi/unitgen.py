@@ -148,22 +148,49 @@ def provider_supports_refresh(provider: str) -> bool:
     return provider in _REFRESHABLE_PROVIDERS
 
 
-def generate_provider_setup_timer(
+def generate_provider_refresh_service(provider: str) -> str:
+    """Generate psi-{provider}-refresh.service — the wrapper unit the timer fires.
+
+    The wrapper exists because ``psi-{provider}-setup.service`` uses
+    ``Type=oneshot`` with ``RemainAfterExit=yes`` so other units can depend on
+    "setup has successfully run" without re-triggering it on every restart. The
+    side effect is that ``ActiveEnterTimestamp`` on the setup unit only updates
+    on the first run, and a timer's ``OnUnitActiveSec`` anchored to that
+    timestamp will only fire once.
+
+    This wrapper is a plain oneshot with no ``RemainAfterExit``, so its
+    ``ActiveEnterTimestamp`` updates every run. The timer uses
+    ``OnUnitActiveSec`` against the wrapper and re-arms correctly. Each run
+    calls ``systemctl restart`` on the setup unit, which DOES re-run the
+    ExecStart even when it was ``active (exited)``.
+    """
+    return (
+        "[Unit]\n"
+        f"Description=PSI {provider} secret cache refresh\n"
+        f"After=psi-{provider}-setup.service\n"
+        "\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        f"ExecStart=/usr/bin/systemctl restart psi-{provider}-setup.service\n"
+    )
+
+
+def generate_provider_refresh_timer(
     provider: str,
     interval: str,
     randomized_delay: str,
 ) -> str:
-    """Generate psi-{provider}-setup.timer for periodic secret cache refresh.
+    """Generate psi-{provider}-refresh.timer for periodic secret cache refresh.
 
-    The timer triggers the matching ``psi-{provider}-setup.service`` unit on
-    a relative interval (``OnUnitActiveSec``) so the cache picks up secrets
-    rotated upstream between reboots. ``Persistent=true`` ensures a missed
-    refresh runs on the next boot rather than waiting a full interval.
+    Triggers :func:`generate_provider_refresh_service` on a relative interval
+    (``OnUnitActiveSec``) so the cache picks up secrets rotated upstream
+    between reboots. ``Persistent=true`` catches up missed refreshes after
+    downtime.
 
     Args:
         provider: Provider name (currently only ``infisical`` is supported).
-        interval: systemd time string for ``OnUnitActiveSec`` (e.g. ``"1h"``,
-            ``"30m"``, ``"2h"``).
+        interval: systemd time string for ``OnUnitActiveSec`` and
+            ``OnBootSec`` (e.g. ``"1h"``, ``"30m"``, ``"2h"``).
         randomized_delay: systemd time string for ``RandomizedDelaySec`` to
             spread refresh events across a fleet.
     """
@@ -172,7 +199,7 @@ def generate_provider_setup_timer(
         f"Description=Periodic PSI {provider} secret cache refresh\n"
         "\n"
         "[Timer]\n"
-        f"Unit=psi-{provider}-setup.service\n"
+        f"Unit=psi-{provider}-refresh.service\n"
         f"OnBootSec={interval}\n"
         f"OnUnitActiveSec={interval}\n"
         f"RandomizedDelaySec={randomized_delay}\n"

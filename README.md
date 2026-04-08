@@ -187,8 +187,9 @@ The HSM backend reuses the existing Nitrokey hybrid envelope (RSA-OAEP + AES-256
 unwrapping the AES key via PKCS#11 at `psi serve` startup.
 
 With the cache enabled, `psi systemd install` also generates a periodic refresh timer
-(`psi-infisical-setup.timer`) that runs the setup unit on `refresh_interval`, so a
-secret rotated upstream makes its way into PSI without manual intervention.
+(`psi-infisical-refresh.timer`) plus a small wrapper service that restarts the setup
+unit on `refresh_interval`, so a secret rotated upstream makes its way into PSI without
+manual intervention.
 
 ```bash
 # One-time provisioning (host)
@@ -602,7 +603,7 @@ the exact invocation.
 Generates per-provider setup units based on configured providers:
 - `psi-secrets.container` — long-running lookup service
 - `psi-{provider}-setup.container` — oneshot per provider (e.g. `psi-infisical-setup`, `psi-nitrokeyhsm-setup`)
-- `psi-infisical-setup.timer` — periodic cache refresh (only when the secret cache is enabled)
+- `psi-infisical-refresh.service` + `psi-infisical-refresh.timer` — periodic cache refresh wrapper (only when the secret cache is enabled)
 - `psi-tls-renew.timer` + service — daily TLS renewal (if configured)
 
 When the [secret cache](docs/secret-cache.md) is configured, the generator automatically

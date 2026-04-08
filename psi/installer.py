@@ -20,7 +20,8 @@ from psi.unitgen import (
     generate_native_provider_setup_service,
     generate_native_serve_service,
     generate_native_tls_renew_service,
-    generate_provider_setup_timer,
+    generate_provider_refresh_service,
+    generate_provider_refresh_timer,
     generate_tls_renew_timer,
     provider_supports_refresh,
 )
@@ -206,7 +207,17 @@ def _write_provider_setup_units_container(
 
 
 def _write_refresh_timers(settings: PsiSettings, unit_dir: Path) -> list[str]:
-    """Write periodic cache-refresh timers for providers that support them.
+    """Write periodic cache-refresh wrapper services and timers.
+
+    For each provider that supports periodic refresh, writes two units:
+
+    - ``psi-{provider}-refresh.service`` — a native oneshot that calls
+      ``systemctl restart psi-{provider}-setup.service``. This exists because
+      the setup unit uses ``RemainAfterExit=yes`` so ``ActiveEnterTimestamp``
+      stops updating after the first run, which in turn would prevent
+      ``OnUnitActiveSec`` on the timer from re-arming.
+    - ``psi-{provider}-refresh.timer`` — fires on the configured cadence and
+      triggers the wrapper service.
 
     Returns the list of timer unit names written. Emits nothing and returns
     an empty list when the cache is disabled or no backend is configured —
@@ -219,10 +230,14 @@ def _write_refresh_timers(settings: PsiSettings, unit_dir: Path) -> list[str]:
     for provider_name in settings.providers:
         if not provider_supports_refresh(provider_name):
             continue
-        timer_name = f"psi-{provider_name}-setup.timer"
+        _write_unit(
+            unit_dir / f"psi-{provider_name}-refresh.service",
+            generate_provider_refresh_service(provider_name),
+        )
+        timer_name = f"psi-{provider_name}-refresh.timer"
         _write_unit(
             unit_dir / timer_name,
-            generate_provider_setup_timer(
+            generate_provider_refresh_timer(
                 provider_name,
                 settings.cache.refresh_interval,
                 settings.cache.refresh_randomized_delay,
