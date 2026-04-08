@@ -69,8 +69,13 @@ credential:
 
 ```ini
 [Container]
-Image=ghcr.io/quickvm/psi:dev
+ContainerName=psi-secrets
+Image=ghcr.io/quickvm/psi:latest
 Exec=serve
+SecurityLabelType=container_runtime_t
+Notify=healthy
+HealthCmd=curl -sf --unix-socket /run/psi/psi.sock http://localhost/healthz
+HealthStartPeriod=60s
 Volume=pcscd-socket:/run/pcscd:rw
 Volume=/run/credentials/psi-secrets.service:/run/credentials:ro
 Environment=CREDENTIALS_DIRECTORY=/run/credentials
@@ -78,6 +83,11 @@ Environment=CREDENTIALS_DIRECTORY=/run/credentials
 [Service]
 LoadCredentialEncrypted=hsm-pin
 ```
+
+`psi systemd install --mode container` emits this automatically when the
+[secret cache](secret-cache.md) is configured with `backend: hsm`. The
+`HealthStartPeriod=60s` gives HSM login and (optional) cache decrypt enough
+headroom before podman's first liveness probe.
 
 ## Encrypting a Secret (Store)
 

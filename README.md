@@ -25,17 +25,22 @@ no container spawned per lookup, just a fast HTTP request to a local socket.
 Boot time:
   psi serve                        → starts the lookup service on /run/psi/psi.sock
                                      opens all configured providers (Infisical client, HSM session)
+                                     decrypts state_dir/cache.enc into memory (if cache enabled)
   psi setup --provider nitrokeyhsm → registers HSM-backed workloads (instant, local-only)
   psi setup --provider infisical   → discovers secrets from Infisical, registers with Podman,
-                                     writes systemd drop-ins (retries if Infisical is starting)
+                                     writes systemd drop-ins, populates the encrypted cache
 
 Container start:
   Podman → Secret=myapp--DB_HOST,type=env,target=DB_HOST
          → shell driver calls: curl /run/psi/psi.sock/lookup/{secret_id}
-         → PSI reads JSON mapping from state_dir
-         → dispatches to the correct provider (infisical or nitrokeyhsm)
-         → returns decrypted/fetched value to Podman → injected as env var
+         → PSI checks the in-memory cache → hit → return plaintext (no I/O, no crypto)
+                                          → miss → dispatch to provider, cache the result
+         → returns value to Podman → injected as env var
 ```
+
+The optional [secret cache](docs/secret-cache.md) lets lookups survive upstream provider
+outages by decrypting a single encrypted file at `psi serve` startup and holding the dict
+in memory. Disabled by default — see the cache doc for the threat model.
 
 ## Quick start
 
@@ -110,7 +115,9 @@ Secrets are fetched from Infisical at container start time.
 
 ### Provider: Infisical
 
-Fetches secrets from Infisical at lookup time. No secret values stored on disk.
+Fetches secrets from Infisical at lookup time. By default no secret values are stored on disk —
+only coordinate mappings. Enable the [secret cache](docs/secret-cache.md) if you want lookups
+to survive Infisical outages (the cache is encrypted-at-rest with a TPM or HSM key).
 
 ```yaml
 providers:
@@ -160,6 +167,41 @@ PIN resolution order: `$CREDENTIALS_DIRECTORY/hsm-pin` → config `pin` → `PSI
 
 See the [Nitrokey HSM provider reference](docs/nitrokeyhsm-provider.md) for the full documentation.
 
+### Secret cache
+
+Opt-in single-file encrypted cache. With the cache enabled, `psi-infisical-setup` eagerly
+fetches every configured secret value at boot and writes an encrypted bundle to
+`state_dir/cache.enc`. `psi serve` decrypts it once at startup and serves lookups from
+memory — upstream provider outages no longer stop containers from starting.
+
+```yaml
+cache:
+  enabled: true
+  backend: hsm       # 'tpm' or 'hsm'. Required for the cache to populate.
+```
+
+The TPM backend uses a 32-byte AES-256 key sealed by `systemd-creds` to the host TPM2.
+The HSM backend reuses the existing Nitrokey hybrid envelope (RSA-OAEP + AES-256-GCM),
+unwrapping the AES key via PKCS#11 at `psi serve` startup.
+
+```bash
+# One-time provisioning (host)
+sudo psi cache init --backend tpm    # or --backend hsm
+
+# Inspect — fast path, no crypto
+sudo podman exec -i psi-secrets psi cache status
+
+# Full verify — decrypts and counts entries
+sudo podman exec -i psi-secrets psi cache status --verify
+
+# Refresh the cache from providers (e.g. after rotating a secret)
+sudo podman exec -i psi-secrets psi cache refresh
+```
+
+See the [secret cache reference](docs/secret-cache.md) for the threat model, envelope
+format, deployment walkthroughs (native TPM, container TPM, container HSM), and
+troubleshooting.
+
 ### Workloads
 
 Each workload specifies which provider handles its secrets:
@@ -194,17 +236,17 @@ workloads:
   windmill-server:
     provider: infisical
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill          # shared secrets (DB_HOST, REDIS_URL, etc.)
-      - project: homelab
+      - project: myproject
         path: /windmill/server   # server-specific (MODE=server)
 
   windmill-worker-1:
     provider: infisical
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill          # same shared secrets
-      - project: homelab
+      - project: myproject
         path: /windmill/worker   # worker-specific (MODE=worker, NUM_WORKERS)
 ```
 
@@ -230,9 +272,9 @@ workloads:
     provider: infisical
     depends_on: [psi-infisical-setup.service]
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill
-      - project: homelab
+      - project: myproject
         path: /windmill/worker
 ```
 
@@ -256,17 +298,17 @@ workloads:
   windmill-server:
     provider: infisical
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill
-      - project: homelab
+      - project: myproject
         path: /windmill/server
 
   windmill-worker@:
     provider: infisical
     secrets:
-      - project: homelab
+      - project: myproject
         path: /windmill
-      - project: homelab
+      - project: myproject
         path: /windmill/worker
 ```
 
@@ -446,6 +488,19 @@ psi install                       Generate containers.conf.d/psi.conf
 psi systemd install               Generate systemd units (--mode native or container)
 ```
 
+### Secret cache
+
+```
+psi cache init --backend tpm     Provision a TPM2-sealed AES key and empty cache.enc
+psi cache init --backend hsm     Write an empty cache.enc wrapped with the HSM public key
+psi cache status                 Print backend, file metadata, and on-disk tag (fast)
+psi cache status --verify        Same, plus decrypt and report the entry count (slow)
+psi cache refresh                Re-run setup to repopulate the cache from providers
+psi cache invalidate <id>        Drop a single entry and persist the change
+```
+
+See the [secret cache reference](docs/secret-cache.md) for full documentation.
+
 ### Infisical provider
 
 ```
@@ -529,10 +584,22 @@ operators like `&&`, pipes, or redirection are not interpreted.
 sudo psi systemd install --mode container --image ghcr.io/quickvm/psi:latest --enable
 ```
 
+Or run the same command inside a one-shot psi container if you do not have a native `psi`
+binary on the host. The container needs `/etc/containers/systemd` mounted read-write plus
+the config, D-Bus, and podman sockets — see [secret-cache.md](docs/secret-cache.md) for
+the exact invocation.
+
 Generates per-provider setup units based on configured providers:
 - `psi-secrets.container` — long-running lookup service
 - `psi-{provider}-setup.container` — oneshot per provider (e.g. `psi-infisical-setup`, `psi-nitrokeyhsm-setup`)
 - `psi-tls-renew.timer` + service — daily TLS renewal (if configured)
+
+When the [secret cache](docs/secret-cache.md) is configured, the generator automatically
+adds the HSM or TPM unseal wiring to both `psi-secrets.container` and the
+`psi-{provider}-setup.container` files. For the HSM backend that means the pcscd socket
+volume, `CREDENTIALS_DIRECTORY`, `LoadCredentialEncrypted=hsm-pin`, and an
+`After=pcscd.service` ordering. For the TPM backend that means
+`LoadCredentialEncrypted=psi-cache-key`.
 
 The per-provider split allows independent systemd ordering. For example, Infisical
 can depend on the HSM setup unit for its bootstrap secrets, while other services
@@ -565,8 +632,8 @@ installs quadlet files (`pcscd.container`, `pcscd-socket.volume`).
 
 **Configure PSI serve to use pcscd:**
 
-The PSI serve container needs the pcscd socket volume and a systemd ordering
-dependency:
+The PSI serve container needs the pcscd socket volume, the systemd credential for
+the PIN, and an ordering dependency on `pcscd.service`:
 
 ```ini
 # psi-secrets.container
@@ -575,18 +642,18 @@ After=network-online.target pcscd.service
 
 [Container]
 Volume=pcscd-socket:/run/pcscd:rw
-```
-
-**PIN delivery via TPM-sealed credential:**
-
-```ini
-[Service]
-LoadCredentialEncrypted=hsm-pin
-
-[Container]
 Volume=/run/credentials/psi-secrets.service:/run/credentials:ro
 Environment=CREDENTIALS_DIRECTORY=/run/credentials
+
+[Service]
+LoadCredentialEncrypted=hsm-pin
 ```
+
+`psi systemd install --mode container` emits all of this automatically when the
+[secret cache](docs/secret-cache.md) is configured with `backend: hsm`, and also
+propagates it to `psi-{provider}-setup.container` so the setup path can populate
+the cache. Workloads using the nitrokeyhsm *provider* without the cache backend
+still need the wiring done by hand (or via Butane).
 
 See [Nitrokey HSM setup](#nitrokey-hsm-setup) for PIN encryption instructions.
 
