@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from typing import TYPE_CHECKING
 
@@ -11,7 +10,7 @@ import httpx
 from loguru import logger
 
 from psi.errors import ProviderError
-from psi.models import SystemdScope
+from psi.systemd import daemon_reload
 
 if TYPE_CHECKING:
     from psi.cache import Cache
@@ -69,7 +68,7 @@ def run_setup(
             cache.close()
 
     logger.info("Reloading systemd...")
-    _systemd_daemon_reload(settings.scope)
+    daemon_reload(settings.scope)
     logger.info("Setup complete.")
 
 
@@ -210,44 +209,6 @@ def _fetch_and_register_infisical(
             cache_updates[f"{workload_name}--{key}"] = value
     finally:
         provider.close()
-
-
-def _systemd_daemon_reload(scope: SystemdScope) -> None:
-    """Reload systemd via D-Bus, falling back to systemctl.
-
-    Logs a warning and skips if neither D-Bus nor systemctl is available
-    (e.g. minimal test containers without systemd).
-    """
-    try:
-        _dbus_daemon_reload(scope)
-        return
-    except Exception as e:
-        logger.debug("D-Bus daemon-reload failed ({}), falling back to systemctl", e)
-
-    cmd = ["systemctl"]
-    if scope == SystemdScope.USER:
-        cmd.append("--user")
-    cmd.append("daemon-reload")
-    try:
-        subprocess.run(cmd, check=True)
-    except FileNotFoundError:
-        logger.warning("systemctl not available, skipping daemon-reload")
-
-
-def _dbus_daemon_reload(scope: SystemdScope) -> None:
-    """Reload systemd via D-Bus. Raises on any failure."""
-    import dbus
-
-    bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
-    systemd = bus.get_object(
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-    )
-    manager = dbus.Interface(
-        systemd,
-        "org.freedesktop.systemd1.Manager",
-    )
-    manager.Reload()
 
 
 def _register_secrets(

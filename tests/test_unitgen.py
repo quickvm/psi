@@ -381,3 +381,41 @@ class TestCacheWiring:
         content = generate_native_serve_service("/usr/bin/psi", SystemdScope.SYSTEM)
         assert "psi-cache-key" not in content
         assert "StateDirectory=psi" in content
+
+
+class TestQuadletTranslatability:
+    """Ensure quadlet .container files translate cleanly under podman quadlet."""
+
+    def test_serve_quadlet_does_not_set_invalid_type_simple(self, tmp_path: Path) -> None:
+        """Quadlet rejects Type=simple for .container units.
+
+        Setting it causes podman's quadlet generator to fail with
+        'invalid service Type "simple"' and the resulting .service unit is
+        never created. Long-running containers must use the quadlet default
+        (Type=notify) or Type=exec.
+        """
+        settings = _mock_settings(tmp_path, cache_backend="hsm")
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "Type=simple" not in content
+
+    def test_setup_quadlet_uses_oneshot(self, tmp_path: Path) -> None:
+        """Type=oneshot is valid for quadlet .container units."""
+        settings = _mock_settings(tmp_path, cache_backend="hsm")
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "Type=oneshot" in content
+
+    def test_serve_quadlet_has_container_name(self, tmp_path: Path) -> None:
+        """ContainerName=psi-secrets lets operators `podman exec psi-secrets`."""
+        settings = _mock_settings(tmp_path)
+        content = generate_container_serve_quadlet("psi:latest", settings)
+        assert "ContainerName=psi-secrets" in content
+
+    def test_setup_quadlet_has_container_name(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        content = generate_container_provider_setup_quadlet("psi:latest", settings, "infisical")
+        assert "ContainerName=psi-infisical-setup" in content
+
+    def test_tls_renew_quadlet_has_container_name(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        content = generate_container_tls_renew_quadlet("psi:latest", settings)
+        assert "ContainerName=psi-tls-renew" in content

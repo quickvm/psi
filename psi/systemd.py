@@ -9,7 +9,58 @@ from __future__ import annotations
 import subprocess
 from datetime import UTC, datetime
 
-from psi.models import TimerInfo
+from loguru import logger
+
+from psi.models import SystemdScope, TimerInfo
+
+
+def daemon_reload(scope: SystemdScope) -> None:
+    """Reload systemd, preferring D-Bus and falling back to systemctl.
+
+    Works correctly when called from inside a container that has the system
+    D-Bus socket mounted, and gracefully no-ops on minimal environments where
+    neither D-Bus nor systemctl is available (e.g. build containers).
+
+    Args:
+        scope: System or user systemd instance.
+    """
+    try:
+        _dbus_daemon_reload(scope)
+        return
+    except Exception as e:
+        logger.debug("D-Bus daemon-reload failed ({}), falling back to systemctl", e)
+
+    cmd = ["systemctl"]
+    if scope == SystemdScope.USER:
+        cmd.append("--user")
+    cmd.append("daemon-reload")
+    try:
+        subprocess.run(cmd, check=True)
+        logger.info("Reloaded systemd.")
+    except FileNotFoundError:
+        logger.warning("systemctl not available, skipping daemon-reload")
+    except subprocess.CalledProcessError as e:
+        logger.warning(
+            "systemctl daemon-reload failed ({}); skipping — "
+            "run 'systemctl daemon-reload' on the host manually.",
+            e,
+        )
+
+
+def _dbus_daemon_reload(scope: SystemdScope) -> None:
+    """Reload systemd via D-Bus. Raises on any failure."""
+    import dbus
+
+    bus = dbus.SessionBus() if scope == SystemdScope.USER else dbus.SystemBus()
+    systemd = bus.get_object(
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+    )
+    manager = dbus.Interface(
+        systemd,
+        "org.freedesktop.systemd1.Manager",
+    )
+    manager.Reload()
 
 
 def get_timer_info(

@@ -15,7 +15,6 @@ from psi.setup import (
     _generate_drop_in,
     _is_retryable,
     _setup_infisical_workload,
-    _systemd_daemon_reload,
 )
 
 if TYPE_CHECKING:
@@ -201,60 +200,6 @@ class TestIsRetryable:
 
     def test_other_exception_is_not_retryable(self) -> None:
         assert not _is_retryable(ValueError("nope"))
-
-
-class TestSystemdDaemonReload:
-    def test_dbus_failure_falls_back_to_subprocess(self) -> None:
-        """D-Bus failures (import error, missing bus socket) fall back to systemctl."""
-        with (
-            patch(
-                "psi.setup._dbus_daemon_reload",
-                side_effect=RuntimeError("DBusException: bus not found"),
-            ),
-            patch("psi.setup.subprocess.run") as mock_run,
-        ):
-            _systemd_daemon_reload(SystemdScope.SYSTEM)
-
-        mock_run.assert_called_once_with(["systemctl", "daemon-reload"], check=True)
-
-    def test_dbus_import_error_falls_back(self) -> None:
-        with (
-            patch("psi.setup._dbus_daemon_reload", side_effect=ImportError("no dbus")),
-            patch("psi.setup.subprocess.run") as mock_run,
-        ):
-            _systemd_daemon_reload(SystemdScope.SYSTEM)
-
-        mock_run.assert_called_once_with(["systemctl", "daemon-reload"], check=True)
-
-    def test_user_scope_uses_user_flag_in_fallback(self) -> None:
-        with (
-            patch("psi.setup._dbus_daemon_reload", side_effect=ImportError("no dbus")),
-            patch("psi.setup.subprocess.run") as mock_run,
-        ):
-            _systemd_daemon_reload(SystemdScope.USER)
-
-        mock_run.assert_called_once_with(["systemctl", "--user", "daemon-reload"], check=True)
-
-    def test_dbus_success_skips_subprocess(self) -> None:
-        with (
-            patch("psi.setup._dbus_daemon_reload") as mock_dbus,
-            patch("psi.setup.subprocess.run") as mock_run,
-        ):
-            _systemd_daemon_reload(SystemdScope.SYSTEM)
-
-        mock_dbus.assert_called_once()
-        mock_run.assert_not_called()
-
-    def test_missing_systemctl_is_skipped_with_warning(self) -> None:
-        """When neither D-Bus nor systemctl is available, log and skip."""
-        with (
-            patch("psi.setup._dbus_daemon_reload", side_effect=ImportError("no dbus")),
-            patch(
-                "psi.setup.subprocess.run",
-                side_effect=FileNotFoundError(2, "No such file", "systemctl"),
-            ),
-        ):
-            _systemd_daemon_reload(SystemdScope.SYSTEM)
 
 
 class TestSetupRetry:
