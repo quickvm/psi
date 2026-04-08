@@ -180,6 +180,7 @@ def generate_container_provider_setup_quadlet(
             "Requires=psi-secrets.service",
             "",
             "[Container]",
+            f"ContainerName=psi-{provider}-setup",
             f"Image={image}",
             f"Exec=setup --provider {provider}",
             "Network=host",
@@ -231,6 +232,7 @@ def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> s
         "Wants=network-online.target",
         "",
         "[Container]",
+        "ContainerName=psi-tls-renew",
         f"Image={image}",
         "Exec=tls renew",
         "Network=host",
@@ -348,6 +350,7 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
         "Wants=network-online.target",
         "",
         "[Container]",
+        "ContainerName=psi-secrets",
         f"Image={image}",
         "Exec=serve",
         "Network=host",
@@ -363,11 +366,12 @@ def generate_container_serve_quadlet(image: str, settings: PsiSettings) -> str:
 
     lines.extend(cache_container)
 
+    # Quadlet rejects Type=simple for .container units — it sets Type=notify
+    # automatically. Only Restart and the cache credential go in [Service].
     lines.extend(
         [
             "",
             "[Service]",
-            "Type=simple",
             "Restart=on-failure",
             f"RuntimeDirectory={runtime_dir.name}",
         ]
