@@ -92,6 +92,17 @@ sudo psi install
 This writes `containers.conf.d/psi.conf` which configures Podman's shell secret driver to talk to
 PSI's Unix socket.
 
+**Container mode:** when PSI itself runs as a container, `psi install` inside the container writes
+to the container's filesystem, not the host's. Render the conf to stdout and pipe it to the host
+file instead:
+
+```bash
+sudo podman exec psi-secrets psi install --stdout \
+  | sudo tee /etc/containers/containers.conf.d/psi.conf > /dev/null
+```
+
+The host's Podman picks it up on the next secret lookup; no daemon reload needed.
+
 ### 4. Start PSI and register secrets
 
 ```bash
@@ -395,7 +406,8 @@ so only the config owner can read it.
 
 1. Update the config/credential
 2. Restart `psi-secrets.service`
-3. Re-run `psi install`
+3. Re-run `psi install` (native mode) or pipe `psi install --stdout` from the container to the
+   host's `containers.conf.d/psi.conf` (container mode — see [container mode install](#3-install-the-shell-driver))
 4. Reload systemd
 
 Containers started during the window between steps will fail secret lookups.

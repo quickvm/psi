@@ -116,11 +116,27 @@ def serve(config: ConfigOption = None) -> None:
 
 
 @app.command()
-def install(config: ConfigOption = None) -> None:
+def install(
+    config: ConfigOption = None,
+    stdout: Annotated[
+        bool,
+        typer.Option(
+            "--stdout",
+            help=(
+                "Print the driver conf to stdout instead of writing it. "
+                "Use in container mode: `podman exec psi-secrets psi install "
+                "--stdout | sudo tee /etc/containers/containers.conf.d/psi.conf`."
+            ),
+        ),
+    ] = False,
+) -> None:
     """Generate Podman shell driver config and state directory."""
-    from psi.installer import install_driver_conf
+    from psi.installer import install_driver_conf, render_driver_conf
 
     settings = load_settings(config, scope=detect_scope())
+    if stdout:
+        typer.echo(render_driver_conf(settings), nl=False)
+        return
     install_driver_conf(settings)
 
 
