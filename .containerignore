@@ -4,6 +4,7 @@
 .pytest_cache/
 .buildkite/
 .claude/
+.codex
 dist/
 build/
 tests/

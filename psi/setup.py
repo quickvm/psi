@@ -13,6 +13,8 @@ from psi.errors import ProviderError
 from psi.systemd import daemon_reload
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from psi.cache import Cache
     from psi.settings import PsiSettings
 
@@ -261,3 +263,131 @@ def _generate_drop_in(
 
     drop_in_path.write_text("\n".join(lines) + "\n")
     logger.info("Wrote drop-in: {}", drop_in_path)
+
+
+def dry_run_setup(settings: PsiSettings) -> None:
+    """Inspect Podman secret state without mutating anything.
+
+    For each shell-driver secret registered with Podman, classify it as one
+    of:
+
+    - ``managed`` — a mapping file exists in ``state_dir`` and the stored
+      ``Spec.Driver.Options`` match the current ``containers.conf.d/psi.conf``.
+    - ``stale-opts`` — a mapping file exists but the stored driver opts
+      differ from the current conf (e.g. the socket token was rotated but
+      ``psi setup`` has not been re-run). Re-run ``psi setup`` to refresh.
+    - ``orphaned`` — no mapping file in ``state_dir``. A lookup would return
+      404. Candidate for a future ``psi orphans --prune``.
+
+    Does not fetch from Infisical/HSM or contact anything other than the
+    local Podman API and the on-disk ``state_dir``. Safe to run at any time.
+    """
+    from psi.token import resolve_socket_token
+    from psi.unitgen import generate_driver_conf
+
+    current_opts = _parse_driver_opts(
+        generate_driver_conf(settings.scope, token=resolve_socket_token(settings))
+    )
+
+    try:
+        secrets = _list_podman_shell_secrets()
+    except httpx.HTTPError as e:
+        msg = f"Cannot reach Podman API at {_podman_socket_url()}: {e}"
+        raise ProviderError(msg, provider_name="podman") from e
+
+    managed, stale, orphaned = _classify_secrets(secrets, settings.state_dir, current_opts)
+    _print_dry_run_report(managed, stale, orphaned)
+
+
+_SHELL_OPT_KEYS = ("lookup", "store", "delete", "list")
+
+
+def _parse_driver_opts(conf_text: str) -> dict[str, str]:
+    """Extract the shell-driver opts from generated ``psi.conf`` TOML text.
+
+    Avoids a full TOML parser — the generator produces a fixed shape, and
+    the comparison only needs ``lookup``/``store``/``delete``/``list``.
+    """
+    opts: dict[str, str] = {}
+    for line in conf_text.splitlines():
+        for key in _SHELL_OPT_KEYS:
+            prefix = f'{key} = "'
+            if line.startswith(prefix) and line.endswith('"'):
+                opts[key] = line[len(prefix) : -1]
+    return opts
+
+
+def _list_podman_shell_secrets() -> list[dict]:
+    """Return every Podman secret whose driver is ``shell``."""
+    transport = httpx.HTTPTransport(uds=_podman_socket_url())
+    base = f"http://localhost/{_PODMAN_API_VERSION}"
+    with httpx.Client(transport=transport, timeout=30.0) as client:
+        resp = client.get(f"{base}/libpod/secrets/json")
+        resp.raise_for_status()
+        secrets = resp.json()
+    return [s for s in secrets if s.get("Spec", {}).get("Driver", {}).get("Name") == "shell"]
+
+
+def _classify_secrets(
+    secrets: list[dict],
+    state_dir: Path,
+    current_opts: dict[str, str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Bucket secrets into (managed, stale-opts, orphaned) by name."""
+    managed: list[str] = []
+    stale: list[str] = []
+    orphaned: list[str] = []
+
+    for secret in secrets:
+        spec = secret.get("Spec", {})
+        name = spec.get("Name", "")
+        if not name:
+            continue
+        raw_opts = spec.get("Driver", {}).get("Options", {})
+        stored_opts = {k: raw_opts.get(k, "") for k in _SHELL_OPT_KEYS}
+        mapping_exists = (state_dir / name).exists()
+        if not mapping_exists:
+            orphaned.append(name)
+        elif stored_opts != current_opts:
+            stale.append(name)
+        else:
+            managed.append(name)
+
+    managed.sort()
+    stale.sort()
+    orphaned.sort()
+    return managed, stale, orphaned
+
+
+def _print_dry_run_report(managed: list[str], stale: list[str], orphaned: list[str]) -> None:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    total = len(managed) + len(stale) + len(orphaned)
+
+    summary = Table(title=f"psi setup --dry-run ({total} shell-driver secrets)")
+    summary.add_column("Status")
+    summary.add_column("Count", justify="right")
+    summary.add_row("[green]managed[/green]", str(len(managed)))
+    summary.add_row("[yellow]stale-opts[/yellow]", str(len(stale)))
+    summary.add_row("[red]orphaned[/red]", str(len(orphaned)))
+    console.print(summary)
+
+    if stale:
+        console.print(
+            "\n[yellow]Stale-opts[/yellow] — driver opts differ from current "
+            "psi.conf; re-run `psi setup` to refresh:"
+        )
+        for name in stale:
+            console.print(f"  {name}")
+
+    if orphaned:
+        console.print(
+            "\n[red]Orphaned[/red] — no mapping file in state_dir; lookups would return 404:"
+        )
+        for name in orphaned:
+            console.print(f"  {name}")
+
+    if not stale and not orphaned:
+        console.print("\n[green]All secrets are managed — nothing to do.[/green]")

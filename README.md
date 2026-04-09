@@ -546,6 +546,8 @@ psi serve                         Run the secret lookup service
 psi setup                         Discover secrets, register with Podman, generate drop-ins
 psi setup --provider infisical    Setup only Infisical-backed workloads (with retry)
 psi setup --provider nitrokeyhsm  Setup only Nitrokey HSM-backed workloads
+psi setup --dry-run               Inspect every shell-driver Podman secret without mutating;
+                                  classifies each as managed / stale-opts / orphaned
 psi install                       Generate containers.conf.d/psi.conf
 psi systemd install               Generate systemd units (--mode native or container)
 ```
