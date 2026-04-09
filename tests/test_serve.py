@@ -186,3 +186,35 @@ class TestAuthEnabled:
         )
         h.do_GET()
         assert h._status == 401
+
+
+class _BrokenWriter:
+    """wfile stand-in that fails on every write, like a disconnected peer."""
+
+    def __init__(self, exc: type[OSError]) -> None:
+        self._exc = exc
+
+    def write(self, _data: bytes) -> None:
+        raise self._exc(32, "peer gone")
+
+
+class TestClientHangup:
+    def test_respond_error_swallows_broken_pipe(self, tmp_path: Path) -> None:
+        """A 401 to a disconnected curl must not escape as BrokenPipeError."""
+        handler_cls = _make_test_handler(tmp_path, token="abcdefgh1234")
+        h = handler_cls("/list", headers={})
+        h.wfile = _BrokenWriter(BrokenPipeError)  # type: ignore[assignment]
+
+        h.do_GET()
+
+        assert h._status == 401
+
+    def test_respond_success_swallows_connection_reset(self, tmp_path: Path) -> None:
+        """A 200 response raced by peer reset must also be swallowed."""
+        handler_cls = _make_test_handler(tmp_path, token=None)
+        h = handler_cls("/healthz", headers={})
+        h.wfile = _BrokenWriter(ConnectionResetError)  # type: ignore[assignment]
+
+        h.do_GET()
+
+        assert h._status == 200
