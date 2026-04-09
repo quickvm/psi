@@ -402,15 +402,58 @@ openssl rand -base64 32 | tr -d '\n'
 with the `Authorization` header embedded in the curl commands. The file is set to `0600`
 so only the config owner can read it.
 
-**Token rotation** is disruptive:
+**Token rotation** is disruptive and the order of operations matters. The
+curl commands (including the `Authorization` header) are baked into each
+Podman secret's `Spec.Driver.Options` at *create* time, and the Podman API
+service caches `containers.conf` at startup. Restarting `psi-secrets.service`
+first — before refreshing the secrets — turns on auth enforcement while
+every existing secret still has the old token, and all lookups fail with
+401 until step 6. Do this during a maintenance window; avoid starting new
+containers while the rotation is in progress.
 
-1. Update the config/credential
-2. Restart `psi-secrets.service`
-3. Re-run `psi install` (native mode) or pipe `psi install --stdout` from the container to the
-   host's `containers.conf.d/psi.conf` (container mode — see [container mode install](#3-install-the-shell-driver))
-4. Reload systemd
+1. **Update the config/credential** with the new token value (config file,
+   `PSI_SOCKET_TOKEN`, or the systemd-encrypted credential).
+2. **Regenerate `containers.conf.d/psi.conf`** so the curl commands embed the
+   new `Authorization` header:
+   - Native mode: `sudo psi install`
+   - Container mode: `sudo podman exec psi-secrets psi install --stdout
+     | sudo tee /etc/containers/containers.conf.d/psi.conf > /dev/null`
+     (see [container mode install](#3-install-the-shell-driver))
+3. **Restart the Podman API service** so it picks up the refreshed
+   `containers.conf`:
 
-Containers started during the window between steps will fail secret lookups.
+   ```bash
+   sudo systemctl restart podman.service
+   ```
+
+4. **Re-run `psi setup`** to re-create every workload secret with the new
+   driver opts:
+
+   ```bash
+   sudo psi setup
+   ```
+
+5. **Re-register any secrets outside `config.workloads`** — HSM-backed secrets
+   and anything created manually with `podman secret create --driver shell`
+   (e.g. bootstrap secrets like `INFISICAL_ENCRYPTION_KEY`). `psi setup` only
+   touches workload secrets, so these need a manual pass:
+
+   ```bash
+   for s in $(sudo podman secret ls --format '{{.Name}}'); do
+     mapping=/var/lib/psi/$s
+     [[ -f $mapping ]] && sudo podman secret create --replace --driver shell "$s" "$mapping"
+   done
+   ```
+
+6. **Restart `psi-secrets.service` last** so auth enforcement turns on only
+   after every secret has been refreshed:
+
+   ```bash
+   sudo systemctl restart psi-secrets.service
+   ```
+
+Ordering is load-bearing: `psi-secrets.service` must restart *after* the
+secrets have been re-registered, not before.
 
 ## Nitrokey HSM setup
 
