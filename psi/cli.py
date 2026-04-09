@@ -98,11 +98,25 @@ def setup(
         str | None,
         typer.Option("--provider", help="Only setup workloads for this provider."),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Inspect Podman secret state without mutating anything. "
+                "Classifies every shell-driver secret as managed, stale-opts, "
+                "or orphaned."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Discover secrets, register with Podman, generate systemd drop-ins."""
-    from psi.setup import run_setup
+    from psi.setup import dry_run_setup, run_setup
 
     settings = load_settings(config, scope=detect_scope())
+    if dry_run:
+        dry_run_setup(settings)
+        return
     run_setup(settings, provider=provider)
 
 
