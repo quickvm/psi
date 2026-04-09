@@ -82,6 +82,23 @@ def install_driver_conf(settings: PsiSettings) -> None:
     logger.info("Wrote {}", conf_path)
 
 
+def render_driver_conf(settings: PsiSettings) -> str:
+    """Return the Podman shell driver config as a string.
+
+    Side-effect-free counterpart to :func:`install_driver_conf`. Used by the
+    ``psi install --stdout`` path so container-mode deployments can pipe the
+    rendered conf to the host's ``containers.conf.d/`` without needing a
+    bind mount of the host's container config directory:
+
+        podman exec psi-secrets psi install --stdout \\
+          | sudo tee /etc/containers/containers.conf.d/psi.conf > /dev/null
+    """
+    from psi.token import resolve_socket_token
+
+    token = resolve_socket_token(settings)
+    return generate_driver_conf(settings.scope, token=token)
+
+
 def _install_native(settings: PsiSettings, enable: bool) -> None:
     """Install native systemd units."""
     psi_path = _find_psi_path()

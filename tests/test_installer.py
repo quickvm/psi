@@ -15,6 +15,7 @@ from psi.installer import (
     _write_provider_setup_units_native,
     _write_refresh_timers,
     install_driver_conf,
+    render_driver_conf,
 )
 from psi.models import SystemdScope
 
@@ -100,6 +101,34 @@ class TestInstallDriverConf:
 
         conf_path = conf_dir / "psi.conf"
         assert oct(conf_path.stat().st_mode & 0o777) == "0o644"
+
+
+class TestRenderDriverConf:
+    def test_returns_curl_based_conf_no_token(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        settings.socket_token = None
+        conf = render_driver_conf(settings)
+        assert 'driver = "shell"' in conf
+        assert "curl -sf --unix-socket" in conf
+        assert "Authorization" not in conf
+
+    def test_includes_authorization_header_when_token_present(self, tmp_path: Path) -> None:
+        settings = _mock_settings(tmp_path)
+        settings.socket_token = "tokabc12345"
+        conf = render_driver_conf(settings)
+        assert "Authorization: Bearer tokabc12345" in conf
+
+    def test_does_not_touch_filesystem(self, tmp_path: Path) -> None:
+        """--stdout path must not create state_dir or write any file."""
+        conf_dir = tmp_path / "containers.conf.d"
+        state_dir = tmp_path / "state"
+        settings = _mock_settings(tmp_path)
+        settings.state_dir = state_dir
+        settings.socket_token = None
+        with patch("psi.installer._containers_conf_dir", return_value=conf_dir):
+            render_driver_conf(settings)
+        assert not conf_dir.exists()
+        assert not state_dir.exists()
 
 
 class TestScopeAwarePaths:
