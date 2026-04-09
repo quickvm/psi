@@ -308,18 +308,35 @@ def _make_handler(
             self._respond(200, "\n".join(names).encode())
 
         def _respond(self, code: int, body: bytes) -> None:
-            self.send_response(code)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._write_response(code, [], body)
 
         def _respond_error(self, code: int, error: str, detail: str) -> None:
             body = json.dumps({"error": error, "detail": detail}).encode()
+            self._write_response(code, [("Content-Type", "application/json")], body)
+
+        def _write_response(
+            self,
+            code: int,
+            headers: list[tuple[str, str]],
+            body: bytes,
+        ) -> None:
+            """Write a full HTTP response, swallowing client-hangup errors.
+
+            Podman's shell driver uses ``curl -sf`` which closes the socket
+            as soon as it sees a non-2xx status, so the server routinely
+            races the client on error responses. ``BrokenPipeError`` and
+            ``ConnectionResetError`` from the peer are normal conditions
+            for any HTTP server and must not escape as tracebacks.
+            """
             self.send_response(code)
-            self.send_header("Content-Type", "application/json")
+            for name, value in headers:
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except BrokenPipeError, ConnectionResetError:
+                pass
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             """Suppress per-request logging."""
