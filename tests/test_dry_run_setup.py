@@ -34,12 +34,14 @@ def _fake_settings(tmp_path: Path):
 def _shell_secret(
     name: str,
     *,
+    secret_id: str = "",
     lookup: str = "curl-lookup",
     store: str = "curl-store",
     delete: str = "curl-delete",
     list_: str = "curl-list",
 ) -> dict:
     return {
+        "ID": secret_id or name,
         "Spec": {
             "Name": name,
             "Driver": {
@@ -85,9 +87,9 @@ class TestClassifySecrets:
     }
 
     def test_managed_when_mapping_and_opts_match(self, tmp_path: Path) -> None:
-        (tmp_path / "app--DB_URL").write_text("{}")
+        (tmp_path / "abc123").write_text("{}")
         managed, stale, orphaned = _classify_secrets(
-            [_shell_secret("app--DB_URL")],
+            [_shell_secret("app--DB_URL", secret_id="abc123")],
             tmp_path,
             self.CURRENT,
         )
@@ -96,9 +98,9 @@ class TestClassifySecrets:
         assert orphaned == []
 
     def test_stale_when_opts_drift(self, tmp_path: Path) -> None:
-        (tmp_path / "app--DB_URL").write_text("{}")
+        (tmp_path / "abc123").write_text("{}")
         managed, stale, orphaned = _classify_secrets(
-            [_shell_secret("app--DB_URL", lookup="curl-old-lookup")],
+            [_shell_secret("app--DB_URL", secret_id="abc123", lookup="curl-old-lookup")],
             tmp_path,
             self.CURRENT,
         )
@@ -108,23 +110,23 @@ class TestClassifySecrets:
 
     def test_orphaned_when_no_mapping_file(self, tmp_path: Path) -> None:
         managed, stale, orphaned = _classify_secrets(
-            [_shell_secret("buildkite-agent--GHCR_PAT")],
+            [_shell_secret("buildkite-agent--GHCR_PAT", secret_id="def456")],
             tmp_path,
             self.CURRENT,
         )
         assert orphaned == ["buildkite-agent--GHCR_PAT"]
 
     def test_mixed_state_sorted_per_bucket(self, tmp_path: Path) -> None:
-        (tmp_path / "b-managed").write_text("{}")
-        (tmp_path / "a-managed").write_text("{}")
-        (tmp_path / "stale").write_text("{}")
+        (tmp_path / "id-b").write_text("{}")
+        (tmp_path / "id-a").write_text("{}")
+        (tmp_path / "id-stale").write_text("{}")
         managed, stale, orphaned = _classify_secrets(
             [
-                _shell_secret("b-managed"),
-                _shell_secret("a-managed"),
-                _shell_secret("stale", lookup="drifted"),
-                _shell_secret("orph-b"),
-                _shell_secret("orph-a"),
+                _shell_secret("b-managed", secret_id="id-b"),
+                _shell_secret("a-managed", secret_id="id-a"),
+                _shell_secret("stale", secret_id="id-stale", lookup="drifted"),
+                _shell_secret("orph-b", secret_id="id-orph-b"),
+                _shell_secret("orph-a", secret_id="id-orph-a"),
             ],
             tmp_path,
             self.CURRENT,
@@ -158,8 +160,8 @@ class TestDryRunSetup:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         settings = _fake_settings(tmp_path)
-        (settings.state_dir / "app--OK").write_text("{}")
-        (settings.state_dir / "app--STALE").write_text("{}")
+        (settings.state_dir / "id-ok").write_text("{}")
+        (settings.state_dir / "id-stale").write_text("{}")
 
         from psi.unitgen import generate_driver_conf
 
@@ -169,18 +171,21 @@ class TestDryRunSetup:
 
         secrets = [
             {
+                "ID": "id-ok",
                 "Spec": {
                     "Name": "app--OK",
                     "Driver": {"Name": "shell", "Options": opts},
                 },
             },
             {
+                "ID": "id-stale",
                 "Spec": {
                     "Name": "app--STALE",
                     "Driver": {"Name": "shell", "Options": stale_opts},
                 },
             },
             {
+                "ID": "id-orphan",
                 "Spec": {
                     "Name": "app--ORPHAN",
                     "Driver": {"Name": "shell", "Options": opts},
@@ -198,6 +203,6 @@ class TestDryRunSetup:
         assert "dry-run" in out
         # state_dir must not have gained any new files
         assert sorted(p.name for p in settings.state_dir.iterdir()) == [
-            "app--OK",
-            "app--STALE",
+            "id-ok",
+            "id-stale",
         ]
