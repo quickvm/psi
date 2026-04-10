@@ -341,11 +341,12 @@ def _classify_secrets(
     for secret in secrets:
         spec = secret.get("Spec", {})
         name = spec.get("Name", "")
+        secret_id = secret.get("ID", "")
         if not name:
             continue
         raw_opts = spec.get("Driver", {}).get("Options", {})
         stored_opts = {k: raw_opts.get(k, "") for k in _SHELL_OPT_KEYS}
-        mapping_exists = (state_dir / name).exists()
+        mapping_exists = (state_dir / secret_id).exists()
         if not mapping_exists:
             orphaned.append(name)
         elif stored_opts != current_opts:
