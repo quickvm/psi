@@ -155,8 +155,10 @@ def _fetch_and_register_infisical(
 ) -> None:
     """Fetch secrets from Infisical and register with Podman.
 
-    Populates ``cache_updates`` with ``{namespaced_name: value_bytes}`` so the
+    Populates ``cache_updates`` with ``{podman_hex_id: value_bytes}`` so the
     caller can flush the encrypted cache once all workloads are processed.
+    The cache must be keyed by Podman's hex secret ID because that is what
+    the serve lookup path receives in ``$SECRET_ID``.
     """
     from psi.providers.infisical import InfisicalProvider
     from psi.providers.infisical.models import InfisicalConfig, resolve_auth
@@ -204,11 +206,13 @@ def _fetch_and_register_infisical(
             logger.info("Found {} secrets", len(secrets))
 
         logger.info("Merged: {} unique secrets", len(merged))
-        _register_secrets(settings, workload_name, merged)
+        id_map = _register_secrets(settings, workload_name, merged)
         _generate_drop_in(settings, workload_name, merged)
 
         for key, value in values.items():
-            cache_updates[f"{workload_name}--{key}"] = value
+            secret_id = id_map.get(key, "")
+            if secret_id:
+                cache_updates[secret_id] = value
     finally:
         provider.close()
 
@@ -217,10 +221,16 @@ def _register_secrets(
     settings: PsiSettings,
     workload_name: str,
     secrets: dict[str, str],
-) -> None:
-    """Create namespaced Podman secrets with mapping data."""
+) -> dict[str, str]:
+    """Create namespaced Podman secrets with mapping data.
+
+    Returns:
+        Mapping of ``{secret_key: podman_hex_id}`` so the caller can
+        populate the encrypted cache with the correct lookup key.
+    """
     transport = httpx.HTTPTransport(uds=_podman_socket_url())
     base = f"http://localhost/{_PODMAN_API_VERSION}"
+    id_map: dict[str, str] = {}
 
     with httpx.Client(transport=transport, timeout=30.0) as client:
         for secret_name, mapping_json in secrets.items():
@@ -232,8 +242,12 @@ def _register_secrets(
                 content=mapping_json.encode(),
             )
             resp.raise_for_status()
+            secret_id = resp.json().get("ID", "")
+            if secret_id:
+                id_map[secret_name] = secret_id
 
     logger.info("Registered {} secrets with Podman", len(secrets))
+    return id_map
 
 
 def _generate_drop_in(
