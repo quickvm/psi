@@ -52,8 +52,11 @@ class PKCS11Session:
         try:
             self._session.login(pin, CKU_USER)
         except PyKCS11Error as e:
-            msg = f"HSM login failed: {e}. Check your PIN."
-            raise ProviderError(msg, provider_name="nitrokeyhsm") from e
+            if "CKR_USER_ALREADY_LOGGED_IN" in str(e):
+                pass
+            else:
+                msg = f"HSM login failed: {e}. Check your PIN."
+                raise ProviderError(msg, provider_name="nitrokeyhsm") from e
 
     def close(self) -> None:
         """Log out and close the session."""
