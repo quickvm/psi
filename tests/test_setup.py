@@ -16,6 +16,7 @@ from psi.setup import (
     _RETRY_DELAYS,
     _generate_drop_in,
     _is_retryable,
+    _register_secrets,
     _setup_infisical_workload,
 )
 
@@ -343,3 +344,30 @@ class TestSetupRetry:
             _setup_infisical_workload(settings, "myapp", {})
 
         assert call_count == 1
+
+
+class TestRegisterSecretsIdMap:
+    def test_returns_secret_id_from_podman_api(self, tmp_path: Path) -> None:
+        """_register_secrets returns {key: hex_id} for cache keying."""
+        delete_resp = httpx.Response(204, request=httpx.Request("DELETE", "http://x"))
+        create_resp = httpx.Response(
+            200,
+            json={"ID": "abc123hex"},
+            request=httpx.Request("POST", "http://x"),
+        )
+
+        def mock_request(method, url, **kwargs):
+            if method == "DELETE":
+                return delete_resp
+            return create_resp
+
+        settings = _make_settings(tmp_path)
+
+        with patch("psi.setup.httpx.Client") as mock_client_cls:
+            client = mock_client_cls.return_value.__enter__.return_value
+            client.delete.return_value = delete_resp
+            client.post.return_value = create_resp
+
+            id_map = _register_secrets(settings, "myapp", {"DB_URL": "{}"})
+
+        assert id_map == {"DB_URL": "abc123hex"}
