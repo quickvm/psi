@@ -27,28 +27,32 @@ def _reset_logger() -> Iterator[None]:
 
 
 class TestConfigureLogging:
-    def test_json_mode_serializes(self) -> None:
-        sink = io.StringIO()
-        logger.remove()
-        logger.add(sink, serialize=True, level="INFO")
+    def test_json_mode_emits_flat_structured_record(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """JSON output is one clean object per line, no redundant text field."""
+        configure_logging(level="INFO", json_output=True)
 
         logger.bind(event="test.event", key="value").info("test message")
 
-        output = sink.getvalue().strip()
+        output = capsys.readouterr().err.strip()
         record = json.loads(output)
-        assert record["record"]["message"] == "test message"
-        assert record["record"]["extra"]["event"] == "test.event"
-        assert record["record"]["extra"]["key"] == "value"
+        assert record["message"] == "test message"
+        assert record["level"] == "INFO"
+        assert record["extra"]["event"] == "test.event"
+        assert record["extra"]["key"] == "value"
+        # No embedded pre-formatted text field with newlines
+        assert "text" not in record
+        assert "\\n" not in output
+        assert output.count("\n") == 0  # one line only
 
-    def test_level_filtering(self) -> None:
-        sink = io.StringIO()
-        logger.remove()
-        logger.add(sink, serialize=True, level="WARNING")
+    def test_level_filtering(self, capsys: pytest.CaptureFixture[str]) -> None:
+        configure_logging(level="WARNING", json_output=True)
 
         logger.info("should not appear")
         logger.warning("should appear")
 
-        output = sink.getvalue()
+        output = capsys.readouterr().err
         assert "should not appear" not in output
         assert "should appear" in output
 
