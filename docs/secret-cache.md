@@ -513,3 +513,23 @@ container will be killed and restarted in a loop. Confirm the issue with
 `sudo journalctl -u psi-secrets.service` and raise `HealthStartPeriod` in
 the generated quadlet (or use the TPM backend, which has much lower
 startup latency).
+
+### `psi serve` is handling 10+ lookups/sec when all containers are stable
+
+This is expected and is not a PSI issue. Podman re-resolves every `Secret=`
+reference in a container's quadlet on every `podman healthcheck run` call —
+not just at container start. With the default `HealthInterval=30s`, each
+container with N secrets generates N lookups per 30 seconds for its entire
+lifetime. Across a fleet this reaches double-digit lookups per second.
+
+The secret value is already resolved into the container's environment at
+start time and never changes, so the re-resolution is wasted work, but that
+is Podman's behavior and not something PSI can opt out of. The cache serves
+every one of these hits from an in-memory dict in under a millisecond, so
+the throughput cost is negligible.
+
+To keep the journal quiet, `psi serve` logs cache hits at `DEBUG` level
+(off by default). Cache misses, provider fetches, and errors still log at
+`INFO` / `WARNING` / `ERROR`. If you want to see the hit-rate, either run
+with `--log-level=DEBUG` or grep for `"event": "secret.lookup"` in the
+journal with `LOGURU_LEVEL=DEBUG` exported into the serve unit.

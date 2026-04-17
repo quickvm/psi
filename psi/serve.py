@@ -229,7 +229,7 @@ def _make_handler(
                 cached = cache.get(secret_id)
                 if cached is not None:
                     self._respond(200, cached)
-                    audit.bind(outcome="success", source="cache").info("lookup")
+                    audit.bind(outcome="success", source="cache").debug("lookup")
                     return
 
             try:
