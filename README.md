@@ -220,6 +220,16 @@ See the [secret cache reference](docs/secret-cache.md) for the threat model, env
 format, deployment walkthroughs (native TPM, container TPM, container HSM), and
 troubleshooting.
 
+**Why `psi serve` is busy even when containers are stable:** Podman re-resolves
+every `Secret=` reference in a container's quadlet each time that container's
+healthcheck fires — not just at container start. With ~50 containers and a
+default `HealthInterval=30s`, this generates a constant ~15+ lookups per second
+against the PSI socket, one per secret per container per healthcheck cycle. This
+is upstream Podman behavior, not a PSI bug. The cache serves these hits from an
+in-memory dict in under a millisecond, so the cost is trivial — cache hits are
+logged at `DEBUG` so the journal is not flooded. Cache misses and provider
+errors stay at `INFO` / `WARNING`.
+
 ### Workloads
 
 Each workload specifies which provider handles its secrets:
