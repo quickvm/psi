@@ -244,11 +244,7 @@ def _make_handler(
                 return
 
             if cache is not None:
-                try:
-                    cache.set(secret_id, value)
-                    cache.save()
-                except Exception as e:
-                    logger.warning("Failed to persist cache entry {}: {}", secret_id, e)
+                cache.set(secret_id, value)
 
             self._respond(200, value)
             audit.bind(outcome="success", source="provider").info("lookup")
