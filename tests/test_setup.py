@@ -16,6 +16,7 @@ from psi.setup import (
     _RETRY_DELAYS,
     _generate_drop_in,
     _is_retryable,
+    _prune_stale_cache_entries,
     _register_secrets,
     _setup_infisical_workload,
 )
@@ -371,3 +372,56 @@ class TestRegisterSecretsIdMap:
             id_map = _register_secrets(settings, "myapp", {"DB_URL": "{}"})
 
         assert id_map == {"DB_URL": "abc123hex"}
+
+
+class TestPruneStaleCacheEntries:
+    def test_drops_entries_not_in_active_podman_ids(self) -> None:
+        """Orphaned cache entries from prior setup runs are pruned."""
+        from unittest.mock import MagicMock
+
+        cache = MagicMock()
+        cache.entry_ids.return_value = ["active1", "stale-old", "active2", "stale-older"]
+
+        podman_secrets = [
+            {"ID": "active1", "Spec": {"Name": "x", "Driver": {"Name": "shell"}}},
+            {"ID": "active2", "Spec": {"Name": "y", "Driver": {"Name": "shell"}}},
+        ]
+
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            _prune_stale_cache_entries(cache)
+
+        invalidated = [call.args[0] for call in cache.invalidate.call_args_list]
+        assert sorted(invalidated) == ["stale-old", "stale-older"]
+
+    def test_keeps_cache_intact_if_podman_api_unreachable(self) -> None:
+        """A Podman API failure should not drop any entries."""
+        from unittest.mock import MagicMock
+
+        cache = MagicMock()
+        cache.entry_ids.return_value = ["keep1", "keep2"]
+
+        with patch(
+            "psi.setup._list_podman_shell_secrets",
+            side_effect=httpx.ConnectError("refused"),
+        ):
+            _prune_stale_cache_entries(cache)
+
+        cache.invalidate.assert_not_called()
+
+    def test_no_op_when_cache_is_already_clean(self) -> None:
+        """No invalidate calls when every entry is already in Podman."""
+        from unittest.mock import MagicMock
+
+        cache = MagicMock()
+        cache.entry_ids.return_value = ["abc", "def"]
+
+        with patch(
+            "psi.setup._list_podman_shell_secrets",
+            return_value=[
+                {"ID": "abc", "Spec": {"Name": "x", "Driver": {"Name": "shell"}}},
+                {"ID": "def", "Spec": {"Name": "y", "Driver": {"Name": "shell"}}},
+            ],
+        ):
+            _prune_stale_cache_entries(cache)
+
+        cache.invalidate.assert_not_called()
