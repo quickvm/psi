@@ -13,7 +13,12 @@ from loguru import logger
 
 from psi.errors import PsiError
 from psi.files import write_bytes_secure
-from psi.provider import close_all_providers, open_all_providers, parse_mapping
+from psi.provider import (
+    close_all_providers,
+    mapping_cache_bytes,
+    open_all_providers,
+    parse_mapping,
+)
 from psi.secret import validate_secret_id
 from psi.token import resolve_socket_token
 
@@ -225,8 +230,11 @@ def _make_handler(
                 provider=provider_name,
             )
 
+            cache_key: str | None = None
             if cache is not None:
-                cached = cache.get(secret_id)
+                cache.maybe_reload()
+                cache_key = cache.cache_key(mapping_cache_bytes(mapping_data))
+                cached = cache.get(cache_key)
                 if cached is not None:
                     self._respond(200, cached)
                     audit.bind(outcome="success", source="cache").debug("lookup")
@@ -243,8 +251,8 @@ def _make_handler(
                 self._respond_error(502, "internal_error", str(e))
                 return
 
-            if cache is not None:
-                cache.set(secret_id, value)
+            if cache is not None and cache_key is not None:
+                cache.set(cache_key, value)
 
             self._respond(200, value)
             audit.bind(outcome="success", source="provider").info("lookup")

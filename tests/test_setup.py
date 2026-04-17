@@ -16,7 +16,6 @@ from psi.setup import (
     _RETRY_DELAYS,
     _generate_drop_in,
     _is_retryable,
-    _prune_stale_cache_entries,
     _register_secrets,
     _setup_infisical_workload,
 )
@@ -347,20 +346,15 @@ class TestSetupRetry:
         assert call_count == 1
 
 
-class TestRegisterSecretsIdMap:
-    def test_returns_secret_id_from_podman_api(self, tmp_path: Path) -> None:
-        """_register_secrets returns {key: hex_id} for cache keying."""
+class TestRegisterSecrets:
+    def test_calls_podman_api_with_delete_then_create_per_secret(self, tmp_path: Path) -> None:
+        """_register_secrets issues delete+create for each mapping."""
         delete_resp = httpx.Response(204, request=httpx.Request("DELETE", "http://x"))
         create_resp = httpx.Response(
             200,
-            json={"ID": "abc123hex"},
+            json={"ID": "ignored"},
             request=httpx.Request("POST", "http://x"),
         )
-
-        def mock_request(method, url, **kwargs):
-            if method == "DELETE":
-                return delete_resp
-            return create_resp
 
         settings = _make_settings(tmp_path)
 
@@ -369,59 +363,11 @@ class TestRegisterSecretsIdMap:
             client.delete.return_value = delete_resp
             client.post.return_value = create_resp
 
-            id_map = _register_secrets(settings, "myapp", {"DB_URL": "{}"})
+            _register_secrets(settings, "myapp", {"DB_URL": "{}", "API_KEY": "{}"})
 
-        assert id_map == {"DB_URL": "abc123hex"}
-
-
-class TestPruneStaleCacheEntries:
-    def test_drops_entries_not_in_active_podman_ids(self) -> None:
-        """Orphaned cache entries from prior setup runs are pruned."""
-        from unittest.mock import MagicMock
-
-        cache = MagicMock()
-        cache.entry_ids.return_value = ["active1", "stale-old", "active2", "stale-older"]
-
-        podman_secrets = [
-            {"ID": "active1", "Spec": {"Name": "x", "Driver": {"Name": "shell"}}},
-            {"ID": "active2", "Spec": {"Name": "y", "Driver": {"Name": "shell"}}},
-        ]
-
-        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
-            _prune_stale_cache_entries(cache)
-
-        invalidated = [call.args[0] for call in cache.invalidate.call_args_list]
-        assert sorted(invalidated) == ["stale-old", "stale-older"]
-
-    def test_keeps_cache_intact_if_podman_api_unreachable(self) -> None:
-        """A Podman API failure should not drop any entries."""
-        from unittest.mock import MagicMock
-
-        cache = MagicMock()
-        cache.entry_ids.return_value = ["keep1", "keep2"]
-
-        with patch(
-            "psi.setup._list_podman_shell_secrets",
-            side_effect=httpx.ConnectError("refused"),
-        ):
-            _prune_stale_cache_entries(cache)
-
-        cache.invalidate.assert_not_called()
-
-    def test_no_op_when_cache_is_already_clean(self) -> None:
-        """No invalidate calls when every entry is already in Podman."""
-        from unittest.mock import MagicMock
-
-        cache = MagicMock()
-        cache.entry_ids.return_value = ["abc", "def"]
-
-        with patch(
-            "psi.setup._list_podman_shell_secrets",
-            return_value=[
-                {"ID": "abc", "Spec": {"Name": "x", "Driver": {"Name": "shell"}}},
-                {"ID": "def", "Spec": {"Name": "y", "Driver": {"Name": "shell"}}},
-            ],
-        ):
-            _prune_stale_cache_entries(cache)
-
-        cache.invalidate.assert_not_called()
+        assert client.delete.call_count == 2
+        assert client.post.call_count == 2
+        assert (
+            "myapp--DB_URL" in client.delete.call_args_list[0].args[0]
+            or "myapp--DB_URL" in client.delete.call_args_list[1].args[0]
+        )

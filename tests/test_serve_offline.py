@@ -83,10 +83,20 @@ def _build_handler(
     return TestHandler
 
 
+_DB_URL_MAPPING = '{"provider":"infisical","project":"p","path":"/","key":"DATABASE_URL"}'
+
+
+def _cache_key_for(cache: Cache, mapping_json: str) -> str:
+    """Compute the HMAC cache key the same way serve does at lookup time."""
+    from psi.provider import mapping_cache_bytes, parse_mapping
+
+    return cache.cache_key(mapping_cache_bytes(parse_mapping(mapping_json)))
+
+
 @pytest.fixture
 def populated_cache(tmp_path: Path) -> Cache:
     cache = Cache(tmp_path / "cache.enc", _FakeBackend())
-    cache.set("myapp--DATABASE_URL", b"postgres://prod/db")
+    cache.set(_cache_key_for(cache, _DB_URL_MAPPING), b"postgres://prod/db")
     cache.save()
     fresh = Cache(tmp_path / "cache.enc", _FakeBackend())
     fresh.load()
@@ -99,9 +109,7 @@ class TestServeWhileProviderDown:
         tmp_path: Path,
         populated_cache: Cache,
     ) -> None:
-        (tmp_path / "myapp--DATABASE_URL").write_text(
-            '{"provider":"infisical","project":"p","path":"/","key":"DATABASE_URL"}'
-        )
+        (tmp_path / "myapp--DATABASE_URL").write_text(_DB_URL_MAPPING)
         provider = MagicMock()
         provider.lookup.side_effect = ProviderError(
             "Cannot reach Infisical API",
@@ -122,9 +130,8 @@ class TestServeWhileProviderDown:
         tmp_path: Path,
         populated_cache: Cache,
     ) -> None:
-        (tmp_path / "myapp--NEW_KEY").write_text(
-            '{"provider":"infisical","project":"p","path":"/","key":"NEW_KEY"}'
-        )
+        new_mapping = '{"provider":"infisical","project":"p","path":"/","key":"NEW_KEY"}'
+        (tmp_path / "myapp--NEW_KEY").write_text(new_mapping)
         provider = MagicMock()
         provider.lookup.return_value = b"fresh-value"
 
@@ -135,7 +142,7 @@ class TestServeWhileProviderDown:
         assert h._status == 200
         assert h.wfile.getvalue() == b"fresh-value"
         provider.lookup.assert_called_once()
-        assert populated_cache.get("myapp--NEW_KEY") == b"fresh-value"
+        assert populated_cache.get(_cache_key_for(populated_cache, new_mapping)) == b"fresh-value"
 
     def test_provider_error_without_cache_entry_returns_502(
         self,

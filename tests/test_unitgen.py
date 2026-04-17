@@ -478,13 +478,13 @@ class TestProviderRefreshService:
         content = generate_provider_refresh_service("infisical")
         assert "After=psi-infisical-setup.service" in content
 
-    def test_restarts_psi_secrets_so_serve_reloads_the_fresh_cache(self) -> None:
-        """After setup writes a fresh cache with new hex IDs, psi-secrets must
-        restart to reload it — otherwise serve keeps the old IDs in memory and
-        every subsequent lookup misses the cache.
+    def test_does_not_force_restart_psi_secrets(self) -> None:
+        """Serve auto-reloads via cache file mtime watch. The refresh wrapper
+        must not restart psi-secrets — doing so caused a 30s window of
+        lookup failures after every refresh.
         """
         content = generate_provider_refresh_service("infisical")
-        assert "ExecStart=/usr/bin/systemctl try-restart psi-secrets.service" in content
+        assert "psi-secrets.service" not in content
 
 
 class TestProviderRefreshTimer:
