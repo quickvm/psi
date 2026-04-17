@@ -60,10 +60,12 @@ def run_setup(
             else:
                 logger.warning("Unknown provider '{}', skipping", workload.provider)
 
-        if cache is not None and cache_updates:
-            logger.info("Writing {} entries to secret cache", len(cache_updates))
-            for key, value in cache_updates.items():
-                cache.set(key, value)
+        if cache is not None:
+            if cache_updates:
+                logger.info("Writing {} entries to secret cache", len(cache_updates))
+                for key, value in cache_updates.items():
+                    cache.set(key, value)
+            _prune_stale_cache_entries(cache)
             cache.save()
     finally:
         if cache is not None:
@@ -72,6 +74,27 @@ def run_setup(
     logger.info("Reloading systemd...")
     daemon_reload(settings.scope)
     logger.info("Setup complete.")
+
+
+def _prune_stale_cache_entries(cache: Cache) -> None:
+    """Drop cache entries whose keys are not currently in Podman's secret store.
+
+    Each time ``_register_secrets`` deletes and re-creates a Podman secret,
+    Podman assigns a new hex ID. The old ID's cache entry becomes orphaned —
+    valid ciphertext for a secret that no longer exists. Without pruning, the
+    cache grows unboundedly across setup runs.
+    """
+    try:
+        active_ids = {s.get("ID", "") for s in _list_podman_shell_secrets()}
+    except httpx.HTTPError as e:
+        logger.warning("Cannot query Podman secrets for cache pruning: {}", e)
+        return
+
+    stale = [k for k in cache.entry_ids() if k not in active_ids]
+    if stale:
+        logger.info("Pruning {} stale cache entries", len(stale))
+        for key in stale:
+            cache.invalidate(key)
 
 
 def _open_setup_cache(settings: PsiSettings) -> Cache | None:
