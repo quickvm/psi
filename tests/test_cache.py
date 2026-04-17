@@ -196,3 +196,100 @@ class TestClose:
     def test_close_delegates_to_backend(self, cache: Cache, backend: FakeBackend) -> None:
         cache.close()
         assert backend.close_calls == 1
+
+
+class TestCacheKey:
+    def test_same_mapping_bytes_produce_same_key(self, cache: Cache) -> None:
+        mapping = b'{"provider":"infisical","project":"p","path":"/","key":"K"}'
+        assert cache.cache_key(mapping) == cache.cache_key(mapping)
+
+    def test_different_mappings_produce_different_keys(self, cache: Cache) -> None:
+        a = b'{"provider":"infisical","project":"p","path":"/","key":"A"}'
+        b = b'{"provider":"infisical","project":"p","path":"/","key":"B"}'
+        assert cache.cache_key(a) != cache.cache_key(b)
+
+    def test_key_is_stable_across_save_and_load(self, cache: Cache) -> None:
+        mapping = b'{"provider":"infisical","project":"p","path":"/","key":"K"}'
+        key_before = cache.cache_key(mapping)
+        cache.set(key_before, b"value")
+        cache.save()
+
+        reloaded = Cache(cache.path, FakeBackend())
+        reloaded.load()
+        assert reloaded.cache_key(mapping) == key_before
+        assert reloaded.get(key_before) == b"value"
+
+    def test_hmac_key_is_per_host_random(self, tmp_path: Path) -> None:
+        """Two freshly-initialized caches produce different keys for same input.
+
+        The HMAC key is random on init; only load() imports one from an
+        existing file. Cross-host correlation of cache contents is impossible.
+        """
+        mapping = b'{"provider":"infisical","project":"p","path":"/","key":"K"}'
+        a = Cache(tmp_path / "a.enc", FakeBackend())
+        b = Cache(tmp_path / "b.enc", FakeBackend())
+        assert a.cache_key(mapping) != b.cache_key(mapping)
+
+
+class TestMaybeReload:
+    def test_no_reload_when_mtime_unchanged(self, cache: Cache) -> None:
+        cache.set("k", b"v")
+        cache.save()
+        assert cache.maybe_reload() is False
+
+    def test_reloads_when_file_is_rewritten_by_another_writer(self, cache: Cache) -> None:
+        """Setup writes; serve (running in another process) picks up changes."""
+        # Initial state: serve sees "old"
+        cache.set("k", b"old")
+        cache.save()
+
+        # Simulate setup's writer: new Cache instance, writes new value
+        other = Cache(cache.path, FakeBackend())
+        other.load()
+        other.set("k", b"new")
+        # Force a distinct mtime even on fast filesystems
+        import os as _os
+        import time as _time
+
+        stat_before = _os.stat(cache.path)
+        while True:
+            other.save()
+            if _os.stat(cache.path).st_mtime_ns != stat_before.st_mtime_ns:
+                break
+            _time.sleep(0.01)
+
+        assert cache.maybe_reload() is True
+        assert cache.get("k") == b"new"
+
+    def test_missing_file_returns_false_no_crash(
+        self, tmp_path: Path, backend: FakeBackend
+    ) -> None:
+        cache = Cache(tmp_path / "does-not-exist.enc", backend)
+        assert cache.maybe_reload() is False
+
+
+class TestLegacyV1PayloadDiscarded:
+    def test_v1_payload_is_treated_as_empty_with_fresh_hmac_key(
+        self, cache: Cache, backend: FakeBackend
+    ) -> None:
+        """A v1 cache file (hex-ID keyed) is ignored on load."""
+        import base64
+        import json
+        import time
+
+        legacy_payload = {
+            "version": 1,
+            "written_at": int(time.time()),
+            "entries": {
+                "abc123hex": base64.b64encode(b"stale").decode(),
+            },
+        }
+        plaintext = json.dumps(legacy_payload, separators=(",", ":")).encode()
+        encrypted = backend.encrypt(plaintext)
+        header = struct.pack(">4sBB", MAGIC, VERSION, backend.tag)
+        cache.path.write_bytes(header + encrypted)
+
+        fresh = Cache(cache.path, backend)
+        fresh.load()
+        assert len(fresh) == 0
+        assert fresh.get("abc123hex") is None

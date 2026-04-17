@@ -48,6 +48,16 @@ def parse_mapping(raw: str) -> dict:
     return data
 
 
+def mapping_cache_bytes(mapping_data: dict) -> bytes:
+    """Canonical byte representation of a parsed mapping for cache keying.
+
+    Both the setup writer and the serve reader compute the cache key from
+    this canonical form, so any trailing whitespace or key-order differences
+    in the on-disk mapping file do not produce spurious cache misses.
+    """
+    return json.dumps(mapping_data, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
 def get_provider(name: str, settings: PsiSettings) -> SecretProvider:
     """Instantiate a provider by name from settings."""
     from psi.providers import create_provider

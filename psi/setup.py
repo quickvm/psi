@@ -44,7 +44,9 @@ def run_setup(
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
     cache = _open_setup_cache(settings)
-    cache_updates: dict[str, bytes] = {}
+    # Keyed by the canonical mapping bytes so the caller can compute the
+    # HMAC cache key once the cache object is available.
+    values_by_mapping: dict[bytes, bytes] = {}
 
     try:
         for workload_name, workload in settings.workloads.items():
@@ -54,18 +56,16 @@ def run_setup(
             logger.info("Workload: {}", workload_name)
 
             if workload.provider == "infisical":
-                _setup_infisical_workload(settings, workload_name, cache_updates)
+                _setup_infisical_workload(settings, workload_name, values_by_mapping)
             elif workload.provider == "nitrokeyhsm":
                 logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
             else:
                 logger.warning("Unknown provider '{}', skipping", workload.provider)
 
-        if cache is not None:
-            if cache_updates:
-                logger.info("Writing {} entries to secret cache", len(cache_updates))
-                for key, value in cache_updates.items():
-                    cache.set(key, value)
-            _prune_stale_cache_entries(cache)
+        if cache is not None and values_by_mapping:
+            logger.info("Writing {} entries to secret cache", len(values_by_mapping))
+            for mapping_bytes, value in values_by_mapping.items():
+                cache.set(cache.cache_key(mapping_bytes), value)
             cache.save()
     finally:
         if cache is not None:
@@ -74,27 +74,6 @@ def run_setup(
     logger.info("Reloading systemd...")
     daemon_reload(settings.scope)
     logger.info("Setup complete.")
-
-
-def _prune_stale_cache_entries(cache: Cache) -> None:
-    """Drop cache entries whose keys are not currently in Podman's secret store.
-
-    Each time ``_register_secrets`` deletes and re-creates a Podman secret,
-    Podman assigns a new hex ID. The old ID's cache entry becomes orphaned —
-    valid ciphertext for a secret that no longer exists. Without pruning, the
-    cache grows unboundedly across setup runs.
-    """
-    try:
-        active_ids = {s.get("ID", "") for s in _list_podman_shell_secrets()}
-    except httpx.HTTPError as e:
-        logger.warning("Cannot query Podman secrets for cache pruning: {}", e)
-        return
-
-    stale = [k for k in cache.entry_ids() if k not in active_ids]
-    if stale:
-        logger.info("Pruning {} stale cache entries", len(stale))
-        for key in stale:
-            cache.invalidate(key)
 
 
 def _open_setup_cache(settings: PsiSettings) -> Cache | None:
@@ -144,13 +123,13 @@ def _is_retryable(exc: Exception) -> bool:
 def _setup_infisical_workload(
     settings: PsiSettings,
     workload_name: str,
-    cache_updates: dict[str, bytes],
+    values_by_mapping: dict[bytes, bytes],
 ) -> None:
     """Run Infisical-specific setup for a workload with retry."""
     last_exc: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            _fetch_and_register_infisical(settings, workload_name, cache_updates)
+            _fetch_and_register_infisical(settings, workload_name, values_by_mapping)
             return
         except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
             cause = e.__cause__ if isinstance(e, ProviderError) else e
@@ -174,15 +153,17 @@ def _setup_infisical_workload(
 def _fetch_and_register_infisical(
     settings: PsiSettings,
     workload_name: str,
-    cache_updates: dict[str, bytes],
+    values_by_mapping: dict[bytes, bytes],
 ) -> None:
     """Fetch secrets from Infisical and register with Podman.
 
-    Populates ``cache_updates`` with ``{podman_hex_id: value_bytes}`` so the
-    caller can flush the encrypted cache once all workloads are processed.
-    The cache must be keyed by Podman's hex secret ID because that is what
-    the serve lookup path receives in ``$SECRET_ID``.
+    Populates ``values_by_mapping`` with ``{canonical_mapping_bytes: value}``.
+    The caller computes the HMAC cache key from these bytes once the cache
+    is available. Keying by mapping content makes the cache survive Podman's
+    delete+create churn — the same mapping always produces the same cache
+    key, regardless of the hex ID Podman has assigned to it today.
     """
+    from psi.provider import mapping_cache_bytes, parse_mapping
     from psi.providers.infisical import InfisicalProvider
     from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 
@@ -229,13 +210,12 @@ def _fetch_and_register_infisical(
             logger.info("Found {} secrets", len(secrets))
 
         logger.info("Merged: {} unique secrets", len(merged))
-        id_map = _register_secrets(settings, workload_name, merged)
+        _register_secrets(settings, workload_name, merged)
         _generate_drop_in(settings, workload_name, merged)
 
         for key, value in values.items():
-            secret_id = id_map.get(key, "")
-            if secret_id:
-                cache_updates[secret_id] = value
+            mapping_bytes = mapping_cache_bytes(parse_mapping(merged[key]))
+            values_by_mapping[mapping_bytes] = value
     finally:
         provider.close()
 
@@ -244,16 +224,15 @@ def _register_secrets(
     settings: PsiSettings,
     workload_name: str,
     secrets: dict[str, str],
-) -> dict[str, str]:
+) -> None:
     """Create namespaced Podman secrets with mapping data.
 
-    Returns:
-        Mapping of ``{secret_key: podman_hex_id}`` so the caller can
-        populate the encrypted cache with the correct lookup key.
+    The hex IDs Podman assigns during delete+create are no longer tracked —
+    cache keying is by mapping content via HMAC, not by Podman's volatile
+    hex IDs.
     """
     transport = httpx.HTTPTransport(uds=_podman_socket_url())
     base = f"http://localhost/{_PODMAN_API_VERSION}"
-    id_map: dict[str, str] = {}
 
     with httpx.Client(transport=transport, timeout=30.0) as client:
         for secret_name, mapping_json in secrets.items():
@@ -265,12 +244,8 @@ def _register_secrets(
                 content=mapping_json.encode(),
             )
             resp.raise_for_status()
-            secret_id = resp.json().get("ID", "")
-            if secret_id:
-                id_map[secret_name] = secret_id
 
     logger.info("Registered {} secrets with Podman", len(secrets))
-    return id_map
 
 
 def _generate_drop_in(

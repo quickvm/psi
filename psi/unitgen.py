@@ -159,16 +159,11 @@ def generate_provider_refresh_service(provider: str) -> str:
     timestamp will only fire once.
 
     This wrapper is a plain oneshot with no ``RemainAfterExit``, so its
-    ``ActiveEnterTimestamp`` updates every run. The timer uses
-    ``OnUnitActiveSec`` against the wrapper and re-arms correctly. Each run:
-
-    1. ``systemctl restart psi-{provider}-setup.service`` — re-runs setup,
-       which re-registers secrets with fresh hex IDs and writes the updated
-       cache file to disk.
-    2. ``systemctl try-restart psi-secrets.service`` — restarts serve so it
-       reloads the fresh cache from disk. Without this, serve's in-memory
-       cache keeps the old hex IDs after each refresh and every subsequent
-       lookup misses the cache until the next operator-triggered restart.
+    ``ActiveEnterTimestamp`` updates every run. Each run calls
+    ``systemctl restart`` on the setup unit, which DOES re-run the ExecStart
+    even when the setup unit was ``active (exited)``. Setup writes the fresh
+    cache file; ``psi serve`` auto-reloads via mtime watch on the next
+    lookup — no forced serve restart required.
     """
     return (
         "[Unit]\n"
@@ -178,7 +173,6 @@ def generate_provider_refresh_service(provider: str) -> str:
         "[Service]\n"
         "Type=oneshot\n"
         f"ExecStart=/usr/bin/systemctl restart psi-{provider}-setup.service\n"
-        "ExecStart=/usr/bin/systemctl try-restart psi-secrets.service\n"
     )
 
 
