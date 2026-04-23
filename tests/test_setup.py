@@ -14,10 +14,12 @@ from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
 from psi.setup import (
     _RETRY_DELAYS,
+    _check_workload_drift,
     _generate_drop_in,
     _is_retryable,
     _register_secrets,
     _setup_infisical_workload,
+    run_setup,
 )
 
 if TYPE_CHECKING:
@@ -209,7 +211,7 @@ class TestSetupRetry:
     def test_retries_on_connect_error_then_succeeds(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates):
+        def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
@@ -229,7 +231,7 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
         ):
-            _setup_infisical_workload(settings, "myapp", {})
+            _setup_infisical_workload(settings, "myapp", {}, [])
 
         assert call_count == 3
 
@@ -252,7 +254,7 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(httpx.ConnectError, match="refused"),
         ):
-            _setup_infisical_workload(settings, "myapp", {})
+            _setup_infisical_workload(settings, "myapp", {}, [])
 
     def test_non_retryable_error_raises_immediately(self, tmp_path: Path) -> None:
         request = httpx.Request("GET", "http://test")
@@ -276,7 +278,7 @@ class TestSetupRetry:
             ),
             pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
         ):
-            _setup_infisical_workload(settings, "myapp", {})
+            _setup_infisical_workload(settings, "myapp", {}, [])
 
     def test_auth_502_retries_then_raises_provider_error(self, tmp_path: Path) -> None:
         """Auth endpoint 502 wrapped as ProviderError is retried via __cause__."""
@@ -284,7 +286,7 @@ class TestSetupRetry:
         response = httpx.Response(502, request=request)
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates):
+        def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
             http_err = httpx.HTTPStatusError("502", request=request, response=response)
@@ -308,7 +310,7 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(ProviderError, match="authentication failed"),
         ):
-            _setup_infisical_workload(settings, "myapp", {})
+            _setup_infisical_workload(settings, "myapp", {}, [])
 
         assert call_count == len(_RETRY_DELAYS) + 1
 
@@ -318,7 +320,7 @@ class TestSetupRetry:
         response = httpx.Response(401, request=request)
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates):
+        def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
             http_err = httpx.HTTPStatusError("401", request=request, response=response)
@@ -341,7 +343,7 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             pytest.raises(ProviderError, match="invalid credentials"),
         ):
-            _setup_infisical_workload(settings, "myapp", {})
+            _setup_infisical_workload(settings, "myapp", {}, [])
 
         assert call_count == 1
 
@@ -371,3 +373,160 @@ class TestRegisterSecrets:
             "myapp--DB_URL" in client.delete.call_args_list[0].args[0]
             or "myapp--DB_URL" in client.delete.call_args_list[1].args[0]
         )
+
+
+def _shell_secret_stub(name: str) -> dict:
+    return {
+        "ID": name,
+        "Spec": {
+            "Name": name,
+            "Driver": {"Name": "shell", "Options": {}},
+        },
+    }
+
+
+class TestCheckWorkloadDrift:
+    def test_empty_when_podman_matches_fetch(self) -> None:
+        merged = {"DB_URL": "{}", "API_KEY": "{}"}
+        podman_secrets = [
+            _shell_secret_stub("myapp--DB_URL"),
+            _shell_secret_stub("myapp--API_KEY"),
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            assert _check_workload_drift("myapp", merged) == []
+
+    def test_returns_stale_podman_secrets_sorted(self) -> None:
+        merged = {"DB_URL": "{}"}
+        podman_secrets = [
+            _shell_secret_stub("myapp--DB_URL"),
+            _shell_secret_stub("myapp--NUM_WORKERS"),
+            _shell_secret_stub("myapp--MODE"),
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            drift = _check_workload_drift("myapp", merged)
+        assert drift == ["myapp--MODE", "myapp--NUM_WORKERS"]
+
+    def test_ignores_secrets_in_other_workload_namespaces(self) -> None:
+        merged = {"DB_URL": "{}"}
+        podman_secrets = [
+            _shell_secret_stub("myapp--DB_URL"),
+            _shell_secret_stub("other-workload--MODE"),
+            _shell_secret_stub("myapp-extra--DB_URL"),
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            assert _check_workload_drift("myapp", merged) == []
+
+    def test_template_workload_prefix_handled(self) -> None:
+        merged = {"DB_HOST": "{}"}
+        podman_secrets = [
+            _shell_secret_stub("windmill-worker@--DB_HOST"),
+            _shell_secret_stub("windmill-worker@--STALE_KEY"),
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            drift = _check_workload_drift("windmill-worker@", merged)
+        assert drift == ["windmill-worker@--STALE_KEY"]
+
+    def test_podman_api_error_returns_empty(self) -> None:
+        with patch(
+            "psi.setup._list_podman_shell_secrets",
+            side_effect=httpx.ConnectError("refused"),
+        ):
+            assert _check_workload_drift("myapp", {"DB_URL": "{}"}) == []
+
+
+class TestRunSetupDriftExit:
+    def test_raises_drift_detected_error_when_drift_accumulates(self, tmp_path: Path) -> None:
+        from psi.errors import DriftDetectedError
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            drift.append(f"{workload_name}--STALE_KEY")
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+            pytest.raises(DriftDetectedError, match="1 Podman secret"),
+        ):
+            run_setup(settings)
+
+    def test_no_raise_when_drift_is_empty(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            pass
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+        ):
+            run_setup(settings)
+
+    def test_aggregates_drift_across_workloads(self, tmp_path: Path) -> None:
+        from psi.errors import DriftDetectedError
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "a": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/a")],
+                ),
+                "b": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/b")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            drift.append(f"{workload_name}--STALE")
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+            pytest.raises(DriftDetectedError, match="2 Podman secret"),
+        ):
+            run_setup(settings)
+
+    def test_daemon_reload_runs_before_raise(self, tmp_path: Path) -> None:
+        """Drift is reported at the end — drop-ins and systemd reload happen first."""
+        from psi.errors import DriftDetectedError
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            drift.append("myapp--STALE")
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload") as mock_reload,
+            pytest.raises(DriftDetectedError),
+        ):
+            run_setup(settings)
+
+        mock_reload.assert_called_once()

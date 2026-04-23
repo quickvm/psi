@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import httpx
 from loguru import logger
 
-from psi.errors import ProviderError
+from psi.errors import DriftDetectedError, ProviderError
 from psi.systemd import daemon_reload
 
 if TYPE_CHECKING:
@@ -40,6 +40,12 @@ def run_setup(
     Args:
         settings: PSI configuration.
         provider: If set, only process workloads using this provider.
+
+    Raises:
+        DriftDetectedError: when one or more Podman secrets under ``<workload>--*``
+            are missing from the current fetch. Drop-ins are still written
+            and systemd is still reloaded — the error fires at the end so
+            the caller (and the setup systemd unit) sees a non-zero exit.
     """
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +53,7 @@ def run_setup(
     # Keyed by the canonical mapping bytes so the caller can compute the
     # HMAC cache key once the cache object is available.
     values_by_mapping: dict[bytes, bytes] = {}
+    drift: list[str] = []
 
     try:
         for workload_name, workload in settings.workloads.items():
@@ -56,7 +63,7 @@ def run_setup(
             logger.info("Workload: {}", workload_name)
 
             if workload.provider == "infisical":
-                _setup_infisical_workload(settings, workload_name, values_by_mapping)
+                _setup_infisical_workload(settings, workload_name, values_by_mapping, drift)
             elif workload.provider == "nitrokeyhsm":
                 logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
             else:
@@ -74,6 +81,17 @@ def run_setup(
     logger.info("Reloading systemd...")
     daemon_reload(settings.scope)
     logger.info("Setup complete.")
+
+    if drift:
+        msg = (
+            f"Drift detected: {len(drift)} Podman secret(s) not present in "
+            "this fetch — drop-ins will not reference them, so containers "
+            "will boot without those env vars. Add 'recursive: true' to the "
+            "source(s) in config.yaml if secrets live in a subfolder, or "
+            "remove the stale secrets with 'podman secret rm'. Run "
+            "'psi setup --dry-run' for per-workload details."
+        )
+        raise DriftDetectedError(msg)
 
 
 def _open_setup_cache(settings: PsiSettings) -> Cache | None:
@@ -124,12 +142,13 @@ def _setup_infisical_workload(
     settings: PsiSettings,
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
+    drift: list[str],
 ) -> None:
     """Run Infisical-specific setup for a workload with retry."""
     last_exc: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            _fetch_and_register_infisical(settings, workload_name, values_by_mapping)
+            _fetch_and_register_infisical(settings, workload_name, values_by_mapping, drift)
             return
         except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
             cause = e.__cause__ if isinstance(e, ProviderError) else e
@@ -154,6 +173,7 @@ def _fetch_and_register_infisical(
     settings: PsiSettings,
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
+    drift: list[str],
 ) -> None:
     """Fetch secrets from Infisical and register with Podman.
 
@@ -162,6 +182,13 @@ def _fetch_and_register_infisical(
     is available. Keying by mapping content makes the cache survive Podman's
     delete+create churn — the same mapping always produces the same cache
     key, regardless of the hex ID Podman has assigned to it today.
+
+    Between ``_register_secrets`` and ``_generate_drop_in``, compares the
+    ``<workload>--*`` Podman namespace against ``merged`` and appends any
+    stale names (present in Podman, absent from this fetch) to ``drift``.
+    Logs a warning per item. The drop-in is still generated from ``merged``
+    alone — this keeps the fix local to the fetch, and the caller decides
+    what to do about the accumulated drift (``run_setup`` raises at the end).
     """
     from psi.provider import mapping_cache_bytes, parse_mapping
     from psi.providers.infisical import InfisicalProvider
@@ -211,6 +238,20 @@ def _fetch_and_register_infisical(
 
         logger.info("Merged: {} unique secrets", len(merged))
         _register_secrets(settings, workload_name, merged)
+
+        orphans = _check_workload_drift(workload_name, merged)
+        for orphan in orphans:
+            logger.warning(
+                "Drift: Podman secret '{}' is not in this fetch — the "
+                "drop-in will not reference it. If the key lives in an "
+                "Infisical subfolder, add 'recursive: true' to the source "
+                "in config.yaml. Otherwise remove the stale secret: "
+                "podman secret rm {}",
+                orphan,
+                orphan,
+            )
+        drift.extend(orphans)
+
         _generate_drop_in(settings, workload_name, merged)
 
         for key, value in values.items():
@@ -291,6 +332,11 @@ def dry_run_setup(settings: PsiSettings) -> None:
     - ``orphaned`` — no mapping file in ``state_dir``. A lookup would return
       404. Candidate for a future ``psi orphans --prune``.
 
+    For each configured workload, also diffs ``<workload>--*`` Podman secrets
+    against the ``Secret=`` targets in its drop-in. Drift on either side —
+    Podman secrets missing from the drop-in, or drop-in references with no
+    backing Podman secret — is reported per-workload.
+
     Does not fetch from Infisical/HSM or contact anything other than the
     local Podman API and the on-disk ``state_dir``. Safe to run at any time.
     """
@@ -308,7 +354,60 @@ def dry_run_setup(settings: PsiSettings) -> None:
         raise ProviderError(msg, provider_name="podman") from e
 
     managed, stale, orphaned = _classify_secrets(secrets, settings.state_dir, current_opts)
-    _print_dry_run_report(managed, stale, orphaned)
+    drift = _workload_dropin_drift(settings, secrets)
+    _print_dry_run_report(managed, stale, orphaned, drift)
+
+
+def _parse_dropin_secret_targets(dropin_path: Path) -> set[str]:
+    """Parse ``Secret=<name>,...`` lines from a drop-in file.
+
+    Returns the set of Podman secret names (the first comma-separated field
+    of each ``Secret=`` value). Returns an empty set if the file does not
+    exist — this matches the "no drop-in yet" state before first setup.
+    """
+    if not dropin_path.exists():
+        return set()
+    names: set[str] = set()
+    for line in dropin_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("Secret="):
+            continue
+        value = stripped[len("Secret=") :]
+        name = value.split(",", 1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _workload_dropin_drift(
+    settings: PsiSettings,
+    secrets: list[dict],
+) -> dict[str, dict[str, list[str]]]:
+    """Per-workload diff between ``<workload>--*`` Podman secrets and drop-in targets.
+
+    Returns a dict keyed by workload name, with each value shaped as::
+
+        {
+            "in_podman_not_in_dropin": [...],  # stale Podman secrets
+            "in_dropin_not_in_podman": [...],  # dangling drop-in refs
+        }
+
+    Only workloads with drift on either side are included. Sorted lists for
+    stable output.
+    """
+    result: dict[str, dict[str, list[str]]] = {}
+    for workload_name in settings.workloads:
+        podman_names = _workload_podman_names(workload_name, secrets)
+        dropin_path = settings.systemd_dir / f"{workload_name}.container.d" / "50-secrets.conf"
+        dropin_names = _parse_dropin_secret_targets(dropin_path)
+        missing_from_dropin = sorted(podman_names - dropin_names)
+        missing_from_podman = sorted(dropin_names - podman_names)
+        if missing_from_dropin or missing_from_podman:
+            result[workload_name] = {
+                "in_podman_not_in_dropin": missing_from_dropin,
+                "in_dropin_not_in_podman": missing_from_podman,
+            }
+    return result
 
 
 _SHELL_OPT_KEYS = ("lookup", "store", "delete", "list")
@@ -338,6 +437,46 @@ def _list_podman_shell_secrets() -> list[dict]:
         resp.raise_for_status()
         secrets = resp.json()
     return [s for s in secrets if s.get("Spec", {}).get("Driver", {}).get("Name") == "shell"]
+
+
+def _workload_podman_names(workload_name: str, secrets: list[dict]) -> set[str]:
+    """Return Podman shell-secret names matching ``<workload_name>--*``."""
+    prefix = f"{workload_name}--"
+    return {
+        s["Spec"]["Name"] for s in secrets if s.get("Spec", {}).get("Name", "").startswith(prefix)
+    }
+
+
+def _check_workload_drift(
+    workload_name: str,
+    merged: dict[str, str],
+) -> list[str]:
+    """Return Podman secrets in ``<workload>--*`` namespace absent from ``merged``.
+
+    These are typically subfolder keys fetched by a previous ``psi setup``
+    run with different source paths or with ``recursive: true`` set, and
+    never removed — ``_register_secrets`` only deletes-then-recreates the
+    names it's given, so anything that falls out of the fetch persists.
+    Such secrets still resolve via the shell driver (direct lookup by key
+    still hits Infisical) but the drop-in never references them, so
+    containers boot without those env vars.
+
+    Returns a sorted list. Returns an empty list if the Podman API is
+    unreachable; the primary fetch-and-register path would already have
+    failed loudly in that case.
+    """
+    expected = {f"{workload_name}--{key}" for key in merged}
+    try:
+        secrets = _list_podman_shell_secrets()
+    except httpx.HTTPError as e:
+        logger.warning(
+            "Cannot list Podman secrets to check drift for '{}': {}",
+            workload_name,
+            e,
+        )
+        return []
+    existing = _workload_podman_names(workload_name, secrets)
+    return sorted(existing - expected)
 
 
 def _classify_secrets(
@@ -372,7 +511,12 @@ def _classify_secrets(
     return managed, stale, orphaned
 
 
-def _print_dry_run_report(managed: list[str], stale: list[str], orphaned: list[str]) -> None:
+def _print_dry_run_report(
+    managed: list[str],
+    stale: list[str],
+    orphaned: list[str],
+    drift: dict[str, dict[str, list[str]]],
+) -> None:
     from rich.console import Console
     from rich.table import Table
 
@@ -385,6 +529,7 @@ def _print_dry_run_report(managed: list[str], stale: list[str], orphaned: list[s
     summary.add_row("[green]managed[/green]", str(len(managed)))
     summary.add_row("[yellow]stale-opts[/yellow]", str(len(stale)))
     summary.add_row("[red]orphaned[/red]", str(len(orphaned)))
+    summary.add_row("[red]workload drift[/red]", str(len(drift)))
     console.print(summary)
 
     if stale:
@@ -402,5 +547,22 @@ def _print_dry_run_report(managed: list[str], stale: list[str], orphaned: list[s
         for name in orphaned:
             console.print(f"  {name}")
 
-    if not stale and not orphaned:
+    if drift:
+        console.print(
+            "\n[red]Workload drift[/red] — drop-in and Podman registry diverge. "
+            "Containers will miss any env vars listed as "
+            "[bold]in Podman, not in drop-in[/bold]:"
+        )
+        for workload_name, groups in drift.items():
+            console.print(f"  [bold]{workload_name}[/bold]")
+            if groups["in_podman_not_in_dropin"]:
+                console.print(
+                    "    in Podman, not in drop-in: " + ", ".join(groups["in_podman_not_in_dropin"])
+                )
+            if groups["in_dropin_not_in_podman"]:
+                console.print(
+                    "    in drop-in, not in Podman: " + ", ".join(groups["in_dropin_not_in_podman"])
+                )
+
+    if not stale and not orphaned and not drift:
         console.print("\n[green]All secrets are managed — nothing to do.[/green]")
