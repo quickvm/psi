@@ -13,6 +13,8 @@ from psi.models import SystemdScope
 from psi.setup import (
     _classify_secrets,
     _parse_driver_opts,
+    _parse_dropin_secret_targets,
+    _workload_dropin_drift,
     dry_run_setup,
 )
 
@@ -26,8 +28,11 @@ def _fake_settings(tmp_path: Path):
     settings = MagicMock()
     settings.state_dir = tmp_path / "state"
     settings.state_dir.mkdir()
+    settings.systemd_dir = tmp_path / "systemd"
+    settings.systemd_dir.mkdir()
     settings.scope = SystemdScope.SYSTEM
     settings.socket_token = None
+    settings.workloads = {}
     return settings
 
 
@@ -206,3 +211,203 @@ class TestDryRunSetup:
             "id-ok",
             "id-stale",
         ]
+
+
+class TestParseDropinSecretTargets:
+    def test_returns_empty_set_when_file_missing(self, tmp_path: Path) -> None:
+        assert _parse_dropin_secret_targets(tmp_path / "missing.conf") == set()
+
+    def test_parses_simple_secret_lines(self, tmp_path: Path) -> None:
+        conf = tmp_path / "50-secrets.conf"
+        conf.write_text(
+            "[Container]\n"
+            "Secret=myapp--DB_URL,type=env,target=DB_URL\n"
+            "Secret=myapp--API_KEY,type=env,target=API_KEY\n"
+        )
+        assert _parse_dropin_secret_targets(conf) == {
+            "myapp--DB_URL",
+            "myapp--API_KEY",
+        }
+
+    def test_ignores_non_secret_lines(self, tmp_path: Path) -> None:
+        conf = tmp_path / "50-secrets.conf"
+        conf.write_text(
+            "[Unit]\n"
+            "After=psi-secrets-setup.service\n"
+            "Wants=psi-secrets-setup.service\n"
+            "\n"
+            "[Container]\n"
+            "Secret=myapp--DB_URL,type=env,target=DB_URL\n"
+        )
+        assert _parse_dropin_secret_targets(conf) == {"myapp--DB_URL"}
+
+    def test_handles_template_unit_names(self, tmp_path: Path) -> None:
+        conf = tmp_path / "50-secrets.conf"
+        conf.write_text("Secret=windmill-worker@--DB_HOST,type=env,target=DB_HOST\n")
+        assert _parse_dropin_secret_targets(conf) == {"windmill-worker@--DB_HOST"}
+
+    def test_empty_file_returns_empty_set(self, tmp_path: Path) -> None:
+        conf = tmp_path / "50-secrets.conf"
+        conf.write_text("")
+        assert _parse_dropin_secret_targets(conf) == set()
+
+
+def _write_dropin(settings_obj, workload_name: str, names: list[str]) -> None:
+    path = settings_obj.systemd_dir / f"{workload_name}.container.d"
+    path.mkdir(parents=True, exist_ok=True)
+    lines = ["[Container]"]
+    for n in names:
+        target = n.split("--", 1)[1]
+        lines.append(f"Secret={n},type=env,target={target}")
+    (path / "50-secrets.conf").write_text("\n".join(lines) + "\n")
+
+
+class TestWorkloadDropinDrift:
+    def test_no_drift_when_dropin_matches_podman(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL", "myapp--API_KEY"])
+        secrets = [
+            _shell_secret("myapp--DB_URL"),
+            _shell_secret("myapp--API_KEY"),
+        ]
+        assert _workload_dropin_drift(settings, secrets) == {}
+
+    def test_detects_podman_secret_missing_from_dropin(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL"])
+        secrets = [
+            _shell_secret("myapp--DB_URL"),
+            _shell_secret("myapp--MODE"),
+            _shell_secret("myapp--NUM_WORKERS"),
+        ]
+        drift = _workload_dropin_drift(settings, secrets)
+        assert drift == {
+            "myapp": {
+                "in_podman_not_in_dropin": ["myapp--MODE", "myapp--NUM_WORKERS"],
+                "in_dropin_not_in_podman": [],
+            }
+        }
+
+    def test_detects_dangling_dropin_reference(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL", "myapp--GHOST"])
+        secrets = [_shell_secret("myapp--DB_URL")]
+        drift = _workload_dropin_drift(settings, secrets)
+        assert drift == {
+            "myapp": {
+                "in_podman_not_in_dropin": [],
+                "in_dropin_not_in_podman": ["myapp--GHOST"],
+            }
+        }
+
+    def test_both_directions_reported(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL", "myapp--GHOST"])
+        secrets = [
+            _shell_secret("myapp--DB_URL"),
+            _shell_secret("myapp--MODE"),
+        ]
+        drift = _workload_dropin_drift(settings, secrets)
+        assert drift == {
+            "myapp": {
+                "in_podman_not_in_dropin": ["myapp--MODE"],
+                "in_dropin_not_in_podman": ["myapp--GHOST"],
+            }
+        }
+
+    def test_workloads_without_drift_omitted(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"clean": None, "dirty": None}
+        _write_dropin(settings, "clean", ["clean--OK"])
+        _write_dropin(settings, "dirty", ["dirty--ONLY_IN_DROPIN"])
+        secrets = [
+            _shell_secret("clean--OK"),
+            _shell_secret("dirty--ONLY_IN_PODMAN"),
+        ]
+        drift = _workload_dropin_drift(settings, secrets)
+        assert list(drift.keys()) == ["dirty"]
+
+    def test_no_dropin_but_podman_has_secrets(self, tmp_path: Path) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        secrets = [_shell_secret("myapp--DB_URL")]
+        drift = _workload_dropin_drift(settings, secrets)
+        assert drift == {
+            "myapp": {
+                "in_podman_not_in_dropin": ["myapp--DB_URL"],
+                "in_dropin_not_in_podman": [],
+            }
+        }
+
+
+class TestDryRunDriftSection:
+    def test_drift_section_printed_with_per_workload_details(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL"])
+
+        from psi.unitgen import generate_driver_conf
+
+        opts = _parse_driver_opts(generate_driver_conf(settings.scope, token=None))
+        (settings.state_dir / "id-1").write_text("{}")
+        (settings.state_dir / "id-2").write_text("{}")
+
+        secrets = [
+            {
+                "ID": "id-1",
+                "Spec": {
+                    "Name": "myapp--DB_URL",
+                    "Driver": {"Name": "shell", "Options": opts},
+                },
+            },
+            {
+                "ID": "id-2",
+                "Spec": {
+                    "Name": "myapp--MODE",
+                    "Driver": {"Name": "shell", "Options": opts},
+                },
+            },
+        ]
+
+        with patch("psi.setup._list_podman_shell_secrets", return_value=secrets):
+            dry_run_setup(settings)
+
+        out = capsys.readouterr().out
+        assert "Workload drift" in out
+        assert "myapp" in out
+        assert "myapp--MODE" in out
+        assert "in Podman, not in drop-in" in out
+
+    def test_no_drift_section_when_clean(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        settings = _fake_settings(tmp_path)
+        settings.workloads = {"myapp": None}
+        _write_dropin(settings, "myapp", ["myapp--DB_URL"])
+
+        from psi.unitgen import generate_driver_conf
+
+        opts = _parse_driver_opts(generate_driver_conf(settings.scope, token=None))
+        (settings.state_dir / "id-1").write_text("{}")
+
+        secrets = [
+            {
+                "ID": "id-1",
+                "Spec": {
+                    "Name": "myapp--DB_URL",
+                    "Driver": {"Name": "shell", "Options": opts},
+                },
+            },
+        ]
+
+        with patch("psi.setup._list_podman_shell_secrets", return_value=secrets):
+            dry_run_setup(settings)
+
+        out = capsys.readouterr().out
+        assert "All secrets are managed" in out

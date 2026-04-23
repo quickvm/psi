@@ -21,3 +21,7 @@ class ProviderError(PsiError):
 
 class SecretNotFoundError(PsiError):
     """Secret mapping not found in state directory."""
+
+
+class DriftDetectedError(PsiError):
+    """Podman secret state diverged from the fetch — drop-ins are incomplete."""
