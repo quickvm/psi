@@ -156,7 +156,12 @@ RUN dnf install -y \\
 
 RUN mkdir -p /run/pcscd && chmod 777 /run/pcscd
 
-CMD ["/usr/sbin/pcscd", "-f", "--disable-polkit"]
+# pcscd refuses to start if pcscd.comm/pcscd.pid already exist (it assumes
+# another pcscd is running). When the socket directory is a persistent
+# named volume, those files survive reboots and stop the daemon coming
+# back. Clear them before starting; exec so SIGTERM still reaches pcscd.
+CMD ["/bin/sh", "-c", \
+    "rm -f /run/pcscd/pcscd.comm /run/pcscd/pcscd.pid && exec /usr/sbin/pcscd -f --disable-polkit"]
 """
 
 _PCSCD_QUADLET = """\
