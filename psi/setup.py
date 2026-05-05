@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import httpx
 from loguru import logger
 
-from psi.errors import DriftDetectedError, ProviderError
+from psi.errors import DriftDetectedError, OrphanedSecretsError, ProviderError
 from psi.systemd import daemon_reload
 
 if TYPE_CHECKING:
@@ -42,10 +42,15 @@ def run_setup(
         provider: If set, only process workloads using this provider.
 
     Raises:
-        DriftDetectedError: when one or more Podman secrets under ``<workload>--*``
-            are missing from the current fetch. Drop-ins are still written
-            and systemd is still reloaded — the error fires at the end so
-            the caller (and the setup systemd unit) sees a non-zero exit.
+        OrphanedSecretsError: when one or more Podman shell secrets have no
+            backing mapping file in ``state_dir``. Lookups for these will
+            return 404 and consuming containers will fail to start. Takes
+            precedence over drift since the failure mode is harder.
+        DriftDetectedError: when one or more Podman secrets under
+            ``<workload>--*`` are missing from the current fetch. Drop-ins
+            are still written and systemd is still reloaded — the error
+            fires at the end so the caller (and the setup systemd unit)
+            sees a non-zero exit.
     """
     settings.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,7 +85,33 @@ def run_setup(
 
     logger.info("Reloading systemd...")
     daemon_reload(settings.scope)
+
+    orphans = _check_orphans(settings)
+    for orphan in orphans:
+        logger.warning(
+            "Orphan: Podman secret '{}' has no mapping file in {} — lookups "
+            "will return 404 and any container that uses this secret will "
+            "fail to start. Re-create the mapping (e.g. 'psi nitrokeyhsm "
+            "store {}') or remove the stale entry with 'podman secret rm {}'.",
+            orphan,
+            settings.state_dir,
+            orphan,
+            orphan,
+        )
+
     logger.info("Setup complete.")
+
+    if orphans:
+        msg = (
+            f"Orphaned secrets detected: {len(orphans)} Podman shell "
+            "secret(s) have no backing mapping file. Lookups will return "
+            "404 and consuming containers will fail to start. Re-create "
+            "the mappings or remove the stale Podman secrets. Run 'psi "
+            "setup --dry-run' for per-secret details."
+        )
+        if drift:
+            msg += f" Additionally, {len(drift)} drift entry/entries — see warnings above."
+        raise OrphanedSecretsError(msg)
 
     if drift:
         msg = (
@@ -445,6 +476,39 @@ def _workload_podman_names(workload_name: str, secrets: list[dict]) -> set[str]:
     return {
         s["Spec"]["Name"] for s in secrets if s.get("Spec", {}).get("Name", "").startswith(prefix)
     }
+
+
+def _check_orphans(settings: PsiSettings) -> list[str]:
+    """Return Podman shell secrets with no backing mapping file in ``state_dir``.
+
+    These are the failure mode the regular setup path otherwise wouldn't
+    surface: a Podman secret created via ``shell`` driver whose
+    corresponding ``state_dir/<SECRET_ID>`` file is missing means
+    ``psi serve`` will reply 404 for any lookup and the consuming
+    container will fail to start. ``setup`` itself can succeed (it only
+    re-registers Infisical-provider secrets), so the regression goes
+    unnoticed until something restarts.
+
+    Returns:
+        Sorted list of orphaned Podman secret names. Returns an empty list
+        if the Podman API is unreachable; the primary fetch-and-register
+        path would already have failed loudly in that case.
+    """
+    try:
+        secrets = _list_podman_shell_secrets()
+    except httpx.HTTPError as e:
+        logger.warning("Cannot list Podman secrets to check for orphans: {}", e)
+        return []
+    orphans: list[str] = []
+    for secret in secrets:
+        spec = secret.get("Spec", {})
+        name = spec.get("Name", "")
+        secret_id = secret.get("ID", "")
+        if not name or not secret_id:
+            continue
+        if not (settings.state_dir / secret_id).exists():
+            orphans.append(name)
+    return sorted(orphans)
 
 
 def _check_workload_drift(
