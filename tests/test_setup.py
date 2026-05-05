@@ -14,6 +14,7 @@ from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
 from psi.setup import (
     _RETRY_DELAYS,
+    _check_orphans,
     _check_workload_drift,
     _generate_drop_in,
     _is_retryable,
@@ -530,3 +531,111 @@ class TestRunSetupDriftExit:
             run_setup(settings)
 
         mock_reload.assert_called_once()
+
+
+class TestCheckOrphans:
+    """Detection of Podman shell secrets with no backing mapping file."""
+
+    def test_no_orphans_when_all_have_mappings(self, tmp_path: Path) -> None:
+        settings = _make_settings(tmp_path)
+        settings.state_dir.mkdir(parents=True)
+        (settings.state_dir / "abc123").write_text("{}")
+        podman_secrets = [
+            {"ID": "abc123", "Spec": {"Name": "myapp--K"}},
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            assert _check_orphans(settings) == []
+
+    def test_returns_names_for_secrets_without_mappings(self, tmp_path: Path) -> None:
+        settings = _make_settings(tmp_path)
+        settings.state_dir.mkdir(parents=True)
+        (settings.state_dir / "have-mapping").write_text("{}")
+        podman_secrets = [
+            {"ID": "have-mapping", "Spec": {"Name": "myapp--PRESENT"}},
+            {"ID": "missing-id-1", "Spec": {"Name": "INFISICAL_ENCRYPTION_KEY"}},
+            {"ID": "missing-id-2", "Spec": {"Name": "INFISICAL_AUTH_SECRET"}},
+        ]
+        with patch("psi.setup._list_podman_shell_secrets", return_value=podman_secrets):
+            assert _check_orphans(settings) == [
+                "INFISICAL_AUTH_SECRET",
+                "INFISICAL_ENCRYPTION_KEY",
+            ]
+
+    def test_returns_empty_when_podman_unreachable(self, tmp_path: Path) -> None:
+        settings = _make_settings(tmp_path)
+        with patch(
+            "psi.setup._list_podman_shell_secrets",
+            side_effect=httpx.ConnectError("connection refused"),
+        ):
+            assert _check_orphans(settings) == []
+
+
+class TestRunSetupOrphanExit:
+    def test_raises_orphaned_secrets_error_when_orphan_present(self, tmp_path: Path) -> None:
+        from psi.errors import OrphanedSecretsError
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            pass
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=["INFISICAL_ENCRYPTION_KEY"]),
+            pytest.raises(OrphanedSecretsError, match="1 Podman shell"),
+        ):
+            run_setup(settings)
+
+    def test_orphan_takes_precedence_over_drift(self, tmp_path: Path) -> None:
+        from psi.errors import OrphanedSecretsError
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            drift.append("myapp--STALE")
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=["INFISICAL_ENCRYPTION_KEY"]),
+            pytest.raises(OrphanedSecretsError, match="1 drift"),
+        ):
+            run_setup(settings)
+
+    def test_no_raise_when_orphans_empty(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+            pass
+
+        with (
+            patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=[]),
+        ):
+            run_setup(settings)

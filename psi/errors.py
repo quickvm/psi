@@ -25,3 +25,12 @@ class SecretNotFoundError(PsiError):
 
 class DriftDetectedError(PsiError):
     """Podman secret state diverged from the fetch — drop-ins are incomplete."""
+
+
+class OrphanedSecretsError(PsiError):
+    """One or more Podman shell secrets have no backing mapping file.
+
+    Lookup will return 404 for these secrets and any container that depends
+    on them will fail to start. Distinct from drift — drift is "secret in
+    Podman, not in fetch", orphan is "secret in Podman, no mapping on disk".
+    """

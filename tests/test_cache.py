@@ -267,6 +267,17 @@ class TestMaybeReload:
         cache = Cache(tmp_path / "does-not-exist.enc", backend)
         assert cache.maybe_reload() is False
 
+    def test_clears_entries_when_file_vanishes_after_load(self, cache: Cache) -> None:
+        """A wiped cache.enc must not leave the in-memory dict serving stale values."""
+        cache.set("k", b"v")
+        cache.save()
+        assert cache.get("k") == b"v"
+
+        cache.path.unlink()
+
+        assert cache.maybe_reload() is True
+        assert cache.get("k") is None
+
 
 class TestLegacyV1PayloadDiscarded:
     def test_v1_payload_is_treated_as_empty_with_fresh_hmac_key(
@@ -293,3 +304,38 @@ class TestLegacyV1PayloadDiscarded:
         fresh.load()
         assert len(fresh) == 0
         assert fresh.get("abc123hex") is None
+
+
+class TestGuardExistingCache:
+    """`psi cache init` must not silently clobber a populated cache file."""
+
+    def test_no_existing_file_returns_none(self, tmp_path: Path) -> None:
+        from psi.cli import _guard_existing_cache
+
+        result = _guard_existing_cache(tmp_path / "cache.enc", force=False)
+        assert result is None
+
+    def test_existing_file_without_force_raises(self, tmp_path: Path) -> None:
+        from psi.cli import _guard_existing_cache
+        from psi.errors import ConfigError
+
+        path = tmp_path / "cache.enc"
+        path.write_bytes(b"existing payload")
+
+        with pytest.raises(ConfigError, match="already exists"):
+            _guard_existing_cache(path, force=False)
+        assert path.exists(), "guard must not delete the existing file when refusing"
+
+    def test_existing_file_with_force_rotates_to_bak(self, tmp_path: Path) -> None:
+        from psi.cli import _guard_existing_cache
+
+        path = tmp_path / "cache.enc"
+        original = b"existing payload"
+        path.write_bytes(original)
+
+        bak = _guard_existing_cache(path, force=True)
+        assert bak is not None
+        assert bak.exists()
+        assert bak.read_bytes() == original
+        assert not path.exists()
+        assert bak.name.startswith("cache.enc.bak-")
