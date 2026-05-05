@@ -193,13 +193,29 @@ class Cache:
         is ~1μs on modern kernels; actual reload happens only when setup
         has finished a write.
 
+        If the backing file has vanished after we previously loaded it, drop
+        the in-memory entries instead of silently serving stale values — a
+        wiped ``cache.enc`` should not produce a cache that pretends entries
+        still exist. The next provider lookup repopulates as needed.
+
         Returns:
-            True if a reload happened, False otherwise.
+            True if entries were reloaded or cleared, False otherwise.
         """
         try:
             current_mtime = self._path.stat().st_mtime_ns
         except FileNotFoundError:
-            return False
+            if self._mtime_ns == 0:
+                return False
+            with self._lock:
+                logger.warning(
+                    "Cache file {} disappeared after previous load; clearing "
+                    "{} in-memory entries to avoid serving stale values.",
+                    self._path,
+                    len(self._entries),
+                )
+                self._entries = {}
+                self._mtime_ns = 0
+            return True
         if current_mtime == self._mtime_ns:
             return False
         self.load()
