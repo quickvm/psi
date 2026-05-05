@@ -244,6 +244,14 @@ def cache_init(
             "Default: <config_dir>/cache.key.",
         ),
     ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Overwrite an existing cache file. The previous file is "
+            "rotated to '<path>.bak-<UTC timestamp>' before the new one is written.",
+        ),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Provision the cache encryption key and write an empty cache file."""
@@ -265,6 +273,8 @@ def cache_init(
     settings = load_settings(config, scope=detect_scope())
     cache_path = settings.cache.resolve_path(settings.state_dir)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    bak_path = _guard_existing_cache(cache_path, force=force)
 
     if backend == "tpm":
         raw_key = os.urandom(32)
@@ -298,6 +308,8 @@ def cache_init(
 
         cache = Cache(cache_path, TpmBackend(key=raw_key))
         cache.save()
+        if bak_path is not None:
+            console.print(f"Previous cache rotated to [bold]{bak_path}[/bold]", highlight=False)
         console.print(
             f"Sealed TPM key → [bold]{target_key_path}[/bold]\n"
             f"Empty cache    → [bold]{cache_path}[/bold]\n"
@@ -321,11 +333,48 @@ def cache_init(
         cache.save()
     finally:
         hsm_backend.close()
+    if bak_path is not None:
+        console.print(f"Previous cache rotated to [bold]{bak_path}[/bold]", highlight=False)
     console.print(
         f"Empty cache → [bold]{cache_path}[/bold]\n"
         "Cache will be unsealed via PKCS#11 at 'psi serve' startup.",
         highlight=False,
     )
+
+
+def _guard_existing_cache(cache_path: Path, *, force: bool) -> Path | None:
+    """Refuse to clobber an existing cache file unless ``force`` is set.
+
+    When ``force`` is set and the file exists, rotate it to
+    ``<name>.bak-<UTC timestamp>`` so a misuse can be undone. The header
+    is not decrypted — wrapping in a backup is cheap and makes the
+    "I just nuked the populated cache" path recoverable.
+
+    Returns:
+        The path the previous file was rotated to, or ``None`` if no file
+        existed.
+
+    Raises:
+        ConfigError: If the file exists and ``force`` is False.
+    """
+    from datetime import UTC, datetime
+
+    from psi.errors import ConfigError
+
+    if not cache_path.exists():
+        return None
+    if not force:
+        msg = (
+            f"Cache file already exists at {cache_path}. Re-running 'psi cache "
+            "init' would replace it with an empty cache and the existing "
+            "entries would be unrecoverable. Pass --force to overwrite; the "
+            "previous file is rotated to a '.bak-<timestamp>' sibling first."
+        )
+        raise ConfigError(msg)
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+    bak = cache_path.with_name(f"{cache_path.name}.bak-{timestamp}")
+    cache_path.rename(bak)
+    return bak
 
 
 @cache_app.command(name="refresh")
