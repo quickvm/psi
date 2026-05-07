@@ -83,6 +83,7 @@ class InfisicalConfig(BaseModel):
     token: TokenSettings = TokenSettings()
     projects: dict[str, ProjectConfig] = {}
     tls: TlsConfig | None = None
+    fetch_delay_ms: int = 0
 
     @model_validator(mode="after")
     def validate_auth_coverage(self) -> InfisicalConfig:

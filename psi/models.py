@@ -44,6 +44,8 @@ class SecretSource(BaseModel):
     project: str
     path: str = "/"
     recursive: bool = False
+    expand_references: bool = False
+    include_imports: bool = False
 
 
 class WorkloadConfig(BaseModel):

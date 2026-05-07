@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -16,8 +16,10 @@ from psi.setup import (
     _RETRY_DELAYS,
     _check_orphans,
     _check_workload_drift,
+    _fetch_and_register_infisical,
     _generate_drop_in,
     _is_retryable,
+    _list_secrets_cached,
     _register_secrets,
     _setup_infisical_workload,
     run_setup,
@@ -212,7 +214,7 @@ class TestSetupRetry:
     def test_retries_on_connect_error_then_succeeds(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
@@ -232,7 +234,14 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=MagicMock(),
+                list_cache={},
+            )
 
         assert call_count == 3
 
@@ -255,7 +264,14 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(httpx.ConnectError, match="refused"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=MagicMock(),
+                list_cache={},
+            )
 
     def test_non_retryable_error_raises_immediately(self, tmp_path: Path) -> None:
         request = httpx.Request("GET", "http://test")
@@ -279,7 +295,14 @@ class TestSetupRetry:
             ),
             pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=MagicMock(),
+                list_cache={},
+            )
 
     def test_auth_502_retries_then_raises_provider_error(self, tmp_path: Path) -> None:
         """Auth endpoint 502 wrapped as ProviderError is retried via __cause__."""
@@ -287,7 +310,7 @@ class TestSetupRetry:
         response = httpx.Response(502, request=request)
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, **kwargs):
             nonlocal call_count
             call_count += 1
             http_err = httpx.HTTPStatusError("502", request=request, response=response)
@@ -311,7 +334,14 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(ProviderError, match="authentication failed"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=MagicMock(),
+                list_cache={},
+            )
 
         assert call_count == len(_RETRY_DELAYS) + 1
 
@@ -321,7 +351,7 @@ class TestSetupRetry:
         response = httpx.Response(401, request=request)
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, **kwargs):
             nonlocal call_count
             call_count += 1
             http_err = httpx.HTTPStatusError("401", request=request, response=response)
@@ -344,7 +374,14 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             pytest.raises(ProviderError, match="invalid credentials"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=MagicMock(),
+                list_cache={},
+            )
 
         assert call_count == 1
 
@@ -449,7 +486,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             drift.append(f"{workload_name}--STALE_KEY")
 
         with (
@@ -470,7 +507,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             pass
 
         with (
@@ -496,7 +533,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             drift.append(f"{workload_name}--STALE")
 
         with (
@@ -520,7 +557,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             drift.append("myapp--STALE")
 
         with (
@@ -584,7 +621,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             pass
 
         with (
@@ -608,7 +645,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             drift.append("myapp--STALE")
 
         with (
@@ -630,7 +667,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, **kwargs):
             pass
 
         with (
@@ -639,3 +676,420 @@ class TestRunSetupOrphanExit:
             patch("psi.setup._check_orphans", return_value=[]),
         ):
             run_setup(settings)
+
+
+class TestListSecretsCached:
+    """Memoization helper: two calls with the same key share one fetch."""
+
+    def _fetch(
+        self,
+        client: MagicMock,
+        memo: dict,
+        *,
+        path: str = "/app",
+        recursive: bool = False,
+        expand_references: bool = False,
+        include_imports: bool = False,
+    ) -> list[dict]:
+        return _list_secrets_cached(
+            client,
+            "tok",
+            "proj",
+            "prod",
+            path,
+            recursive=recursive,
+            expand_references=expand_references,
+            include_imports=include_imports,
+            memo=memo,
+        )
+
+    def test_first_call_hits_client(self) -> None:
+        client = MagicMock()
+        client.list_secrets.return_value = [{"secretKey": "K", "secretValue": "v"}]
+        memo: dict = {}
+
+        result = self._fetch(client, memo)
+
+        assert result == [{"secretKey": "K", "secretValue": "v"}]
+        assert client.list_secrets.call_count == 1
+
+    def test_repeat_call_serves_from_memo(self) -> None:
+        client = MagicMock()
+        client.list_secrets.return_value = [{"secretKey": "K"}]
+        memo: dict = {}
+
+        for _ in range(3):
+            self._fetch(client, memo)
+
+        assert client.list_secrets.call_count == 1
+
+    def test_distinct_path_distinct_entry(self) -> None:
+        client = MagicMock()
+        client.list_secrets.return_value = []
+        memo: dict = {}
+
+        self._fetch(client, memo, path="/a")
+        self._fetch(client, memo, path="/b")
+
+        assert client.list_secrets.call_count == 2
+
+    def test_distinct_recursive_distinct_entry(self) -> None:
+        client = MagicMock()
+        client.list_secrets.return_value = []
+        memo: dict = {}
+
+        self._fetch(client, memo, recursive=False)
+        self._fetch(client, memo, recursive=True)
+
+        assert client.list_secrets.call_count == 2
+
+    def test_distinct_expand_references_distinct_entry(self) -> None:
+        client = MagicMock()
+        client.list_secrets.return_value = []
+        memo: dict = {}
+
+        self._fetch(client, memo, expand_references=False)
+        self._fetch(client, memo, expand_references=True)
+
+        assert client.list_secrets.call_count == 2
+
+
+class TestFetchAndRegisterFlagPassthrough:
+    """SecretSource flags reach InfisicalClient.list_secrets unchanged."""
+
+    def _mock_provider(self) -> MagicMock:
+        mock_client = MagicMock()
+        mock_client.ensure_token.return_value = "tok"
+        mock_client.list_secrets.return_value = []
+        provider = MagicMock()
+        provider._client = mock_client
+        return provider
+
+    def test_default_source_sends_false_false(self, tmp_path: Path) -> None:
+        provider = self._mock_provider()
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        with (
+            patch("psi.setup._register_secrets"),
+            patch("psi.setup._generate_drop_in"),
+            patch("psi.setup._check_workload_drift", return_value=[]),
+        ):
+            _fetch_and_register_infisical(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=provider,
+                list_cache={},
+            )
+
+        kwargs = provider._client.list_secrets.call_args.kwargs
+        assert kwargs["expand_references"] is False
+        assert kwargs["include_imports"] is False
+
+    def test_opted_in_source_sends_true_true(self, tmp_path: Path) -> None:
+        provider = self._mock_provider()
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[
+                        SecretSource(
+                            project="myproject",
+                            path="/app",
+                            expand_references=True,
+                            include_imports=True,
+                        ),
+                    ],
+                ),
+            },
+        )
+
+        with (
+            patch("psi.setup._register_secrets"),
+            patch("psi.setup._generate_drop_in"),
+            patch("psi.setup._check_workload_drift", return_value=[]),
+        ):
+            _fetch_and_register_infisical(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=provider,
+                list_cache={},
+            )
+
+        kwargs = provider._client.list_secrets.call_args.kwargs
+        assert kwargs["expand_references"] is True
+        assert kwargs["include_imports"] is True
+
+    def test_shared_memo_dedupes_across_workloads(self, tmp_path: Path) -> None:
+        """Two workloads with the same source share one list_secrets call."""
+        provider = self._mock_provider()
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "a": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/shared")],
+                ),
+                "b": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/shared")],
+                ),
+            },
+        )
+        list_cache: dict = {}
+
+        with (
+            patch("psi.setup._register_secrets"),
+            patch("psi.setup._generate_drop_in"),
+            patch("psi.setup._check_workload_drift", return_value=[]),
+        ):
+            _fetch_and_register_infisical(
+                settings,
+                "a",
+                {},
+                [],
+                provider=provider,
+                list_cache=list_cache,
+            )
+            _fetch_and_register_infisical(
+                settings,
+                "b",
+                {},
+                [],
+                provider=provider,
+                list_cache=list_cache,
+            )
+
+        assert provider._client.list_secrets.call_count == 1
+
+
+class TestSetupRetryReusesMemo:
+    """Workload-level retry replays through the memo, not the network."""
+
+    def test_retry_does_not_re_call_list_secrets(self, tmp_path: Path) -> None:
+        mock_client = MagicMock()
+        mock_client.ensure_token.return_value = "tok"
+        mock_client.list_secrets.return_value = []
+        provider = MagicMock()
+        provider._client = mock_client
+
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "myapp": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/app")],
+                ),
+            },
+        )
+
+        attempts = 0
+        original = _register_secrets
+
+        def flaky_register(s, w, secrets):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 2:
+                raise httpx.ConnectError("transient")
+            return original(s, w, secrets)
+
+        with (
+            patch("psi.setup._register_secrets", side_effect=flaky_register),
+            patch("psi.setup._generate_drop_in"),
+            patch("psi.setup._check_workload_drift", return_value=[]),
+            patch("psi.setup.time.sleep"),
+        ):
+            _setup_infisical_workload(
+                settings,
+                "myapp",
+                {},
+                [],
+                provider=provider,
+                list_cache={},
+            )
+
+        assert attempts == 2
+        assert mock_client.list_secrets.call_count == 1
+
+
+class TestRunSetupProviderLifecycle:
+    """One InfisicalProvider opened/closed per run, not per workload."""
+
+    def test_provider_opened_once_across_workloads(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "a": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/a")],
+                ),
+                "b": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/b")],
+                ),
+            },
+        )
+
+        mock_provider_instance = MagicMock()
+        mock_provider_class = MagicMock(return_value=mock_provider_instance)
+
+        def noop_fetch(s, w, vbm, drift, **kwargs):
+            pass
+
+        with (
+            patch("psi.providers.infisical.InfisicalProvider", mock_provider_class),
+            patch("psi.setup._fetch_and_register_infisical", side_effect=noop_fetch),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=[]),
+        ):
+            run_setup(settings)
+
+        assert mock_provider_class.call_count == 1
+        assert mock_provider_instance.open.call_count == 1
+        assert mock_provider_instance.close.call_count == 1
+
+    def test_provider_not_opened_for_hsm_only(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "vault": WorkloadConfig(provider="nitrokeyhsm"),
+            },
+            providers={"nitrokeyhsm": {}},
+        )
+
+        mock_provider_class = MagicMock()
+
+        with (
+            patch("psi.providers.infisical.InfisicalProvider", mock_provider_class),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=[]),
+        ):
+            run_setup(settings)
+
+        assert mock_provider_class.call_count == 0
+
+
+class TestRunSetupPacing:
+    """fetch_delay_ms inserts time.sleep between consecutive Infisical fetches."""
+
+    def _settings_two_infisical(self, tmp_path: Path, fetch_delay_ms: int) -> PsiSettings:
+        return _make_settings(
+            tmp_path,
+            workloads={
+                "a": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/a")],
+                ),
+                "b": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/b")],
+                ),
+            },
+            providers={
+                "infisical": {
+                    "api_url": "https://infisical.test",
+                    "auth": {
+                        "method": "universal-auth",
+                        "client_id": "cid",
+                        "client_secret": "csec",
+                    },
+                    "projects": {
+                        "myproject": {"id": "proj-uuid", "environment": "prod"},
+                    },
+                    "fetch_delay_ms": fetch_delay_ms,
+                },
+            },
+        )
+
+    def _run(self, settings: PsiSettings) -> MagicMock:
+        mock_sleep = MagicMock()
+        with (
+            patch("psi.providers.infisical.InfisicalProvider", MagicMock()),
+            patch("psi.setup._fetch_and_register_infisical", side_effect=lambda *a, **k: None),
+            patch("psi.setup.daemon_reload"),
+            patch("psi.setup._check_orphans", return_value=[]),
+            patch("psi.setup.time.sleep", mock_sleep),
+        ):
+            run_setup(settings)
+        return mock_sleep
+
+    def test_no_sleep_when_delay_zero(self, tmp_path: Path) -> None:
+        mock_sleep = self._run(self._settings_two_infisical(tmp_path, fetch_delay_ms=0))
+        assert mock_sleep.call_count == 0
+
+    def test_sleep_between_two_infisical_workloads(self, tmp_path: Path) -> None:
+        mock_sleep = self._run(self._settings_two_infisical(tmp_path, fetch_delay_ms=250))
+        assert mock_sleep.call_args_list == [((0.25,), {})]
+
+    def test_no_sleep_for_single_workload(self, tmp_path: Path) -> None:
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "only": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/x")],
+                ),
+            },
+            providers={
+                "infisical": {
+                    "api_url": "https://infisical.test",
+                    "auth": {
+                        "method": "universal-auth",
+                        "client_id": "cid",
+                        "client_secret": "csec",
+                    },
+                    "projects": {
+                        "myproject": {"id": "proj-uuid", "environment": "prod"},
+                    },
+                    "fetch_delay_ms": 500,
+                },
+            },
+        )
+        mock_sleep = self._run(settings)
+        assert mock_sleep.call_count == 0
+
+    def test_no_sleep_when_hsm_intervenes(self, tmp_path: Path) -> None:
+        """HSM workload between two Infisical workloads breaks the consecutive run."""
+        settings = _make_settings(
+            tmp_path,
+            workloads={
+                "a": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/a")],
+                ),
+                "vault": WorkloadConfig(provider="nitrokeyhsm"),
+                "b": WorkloadConfig(
+                    provider="infisical",
+                    secrets=[SecretSource(project="myproject", path="/b")],
+                ),
+            },
+            providers={
+                "infisical": {
+                    "api_url": "https://infisical.test",
+                    "auth": {
+                        "method": "universal-auth",
+                        "client_id": "cid",
+                        "client_secret": "csec",
+                    },
+                    "projects": {
+                        "myproject": {"id": "proj-uuid", "environment": "prod"},
+                    },
+                    "fetch_delay_ms": 250,
+                },
+                "nitrokeyhsm": {},
+            },
+        )
+        mock_sleep = self._run(settings)
+        assert mock_sleep.call_count == 0

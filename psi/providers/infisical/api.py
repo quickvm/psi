@@ -66,11 +66,20 @@ class InfisicalClient:
         secret_path: str,
         *,
         recursive: bool = False,
+        expand_references: bool = True,
+        include_imports: bool = True,
     ) -> list[dict[str, Any]]:
         """List secrets at a path.
 
         Args:
             recursive: If True, include secrets from subfolders.
+            expand_references: If True, ask Infisical to resolve
+                ``${secret.OTHER}`` references server-side. Server-side
+                cost is conditional but real on heavy reference graphs;
+                turn off for setup paths that don't use references.
+            include_imports: If True, include secrets imported into this
+                path from other projects/paths. Same cost story as
+                ``expand_references``.
 
         Returns:
             List of secret objects with secretKey, secretValue, secretPath, etc.
@@ -83,8 +92,8 @@ class InfisicalClient:
                 "secretPath": secret_path,
                 "recursive": str(recursive).lower(),
                 "viewSecretValue": "true",
-                "expandSecretReferences": "true",
-                "includeImports": "true",
+                "expandSecretReferences": str(expand_references).lower(),
+                "includeImports": str(include_imports).lower(),
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -98,8 +107,15 @@ class InfisicalClient:
         environment: str,
         secret_path: str,
         secret_name: str,
+        *,
+        expand_references: bool = True,
+        include_imports: bool = True,
     ) -> str:
         """Fetch a single secret's value by name and path.
+
+        Args:
+            expand_references: If True, resolve ``${secret.OTHER}`` server-side.
+            include_imports: If True, fall through to imported paths.
 
         Returns:
             The secret value as a string.
@@ -111,8 +127,8 @@ class InfisicalClient:
                 "environment": environment,
                 "secretPath": secret_path,
                 "viewSecretValue": "true",
-                "expandSecretReferences": "true",
-                "includeImports": "true",
+                "expandSecretReferences": str(expand_references).lower(),
+                "includeImports": str(include_imports).lower(),
             },
             headers={"Authorization": f"Bearer {token}"},
         )

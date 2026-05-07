@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
@@ -16,7 +16,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from psi.cache import Cache
+    from psi.providers.infisical import InfisicalProvider
+    from psi.providers.infisical.api import InfisicalClient
     from psi.settings import PsiSettings
+
+ListCacheKey = tuple[str, str, str, bool, bool, bool]
+ListCache = dict[ListCacheKey, list[dict[str, Any]]]
 
 _PODMAN_API_VERSION = "v5.0.0"
 
@@ -60,19 +65,40 @@ def run_setup(
     values_by_mapping: dict[bytes, bytes] = {}
     drift: list[str] = []
 
+    infisical_provider: InfisicalProvider | None = None
+    list_cache: ListCache = {}
+    fetch_delay_ms = 0
+    prev_was_infisical = False
+
     try:
         for workload_name, workload in settings.workloads.items():
             if provider and workload.provider != provider:
                 continue
 
+            is_infisical = workload.provider == "infisical"
+
+            if is_infisical and prev_was_infisical and fetch_delay_ms > 0:
+                time.sleep(fetch_delay_ms / 1000)
+
             logger.info("Workload: {}", workload_name)
 
-            if workload.provider == "infisical":
-                _setup_infisical_workload(settings, workload_name, values_by_mapping, drift)
+            if is_infisical:
+                if infisical_provider is None:
+                    infisical_provider, fetch_delay_ms = _open_infisical_provider(settings)
+                _setup_infisical_workload(
+                    settings,
+                    workload_name,
+                    values_by_mapping,
+                    drift,
+                    provider=infisical_provider,
+                    list_cache=list_cache,
+                )
             elif workload.provider == "nitrokeyhsm":
                 logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
             else:
                 logger.warning("Unknown provider '{}', skipping", workload.provider)
+
+            prev_was_infisical = is_infisical
 
         if cache is not None and values_by_mapping:
             logger.info("Writing {} entries to secret cache", len(values_by_mapping))
@@ -80,6 +106,8 @@ def run_setup(
                 cache.set(cache.cache_key(mapping_bytes), value)
             cache.save()
     finally:
+        if infisical_provider is not None:
+            infisical_provider.close()
         if cache is not None:
             cache.close()
 
@@ -123,6 +151,55 @@ def run_setup(
             "'psi setup --dry-run' for per-workload details."
         )
         raise DriftDetectedError(msg)
+
+
+def _open_infisical_provider(settings: PsiSettings) -> tuple[InfisicalProvider, int]:
+    """Construct and open the Infisical provider once for a setup run.
+
+    Returns the opened provider plus the configured ``fetch_delay_ms`` so
+    the caller can pace inter-workload Infisical fetches.
+    """
+    from psi.providers.infisical import InfisicalProvider
+    from psi.providers.infisical.models import InfisicalConfig
+
+    config = InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
+    provider = InfisicalProvider(settings)
+    provider.open()
+    return provider, config.fetch_delay_ms
+
+
+def _list_secrets_cached(
+    client: InfisicalClient,
+    token: str,
+    project_id: str,
+    environment: str,
+    secret_path: str,
+    *,
+    recursive: bool,
+    expand_references: bool,
+    include_imports: bool,
+    memo: ListCache,
+) -> list[dict[str, Any]]:
+    """Return list_secrets results, memoized for the duration of one run.
+
+    Two sources at the same path with different reference/import flags
+    receive different responses, so all flags participate in the cache key.
+    """
+    key = (project_id, environment, secret_path, recursive, expand_references, include_imports)
+    cached = memo.get(key)
+    if cached is not None:
+        return cached
+    result = client.list_secrets(
+        token,
+        project_id,
+        environment,
+        secret_path,
+        recursive=recursive,
+        expand_references=expand_references,
+        include_imports=include_imports,
+    )
+    memo[key] = result
+    return result
 
 
 def _open_setup_cache(settings: PsiSettings) -> Cache | None:
@@ -174,12 +251,22 @@ def _setup_infisical_workload(
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
     drift: list[str],
+    *,
+    provider: InfisicalProvider,
+    list_cache: ListCache,
 ) -> None:
     """Run Infisical-specific setup for a workload with retry."""
     last_exc: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            _fetch_and_register_infisical(settings, workload_name, values_by_mapping, drift)
+            _fetch_and_register_infisical(
+                settings,
+                workload_name,
+                values_by_mapping,
+                drift,
+                provider=provider,
+                list_cache=list_cache,
+            )
             return
         except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
             cause = e.__cause__ if isinstance(e, ProviderError) else e
@@ -205,6 +292,9 @@ def _fetch_and_register_infisical(
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
     drift: list[str],
+    *,
+    provider: InfisicalProvider,
+    list_cache: ListCache,
 ) -> None:
     """Fetch secrets from Infisical and register with Podman.
 
@@ -220,6 +310,11 @@ def _fetch_and_register_infisical(
     Logs a warning per item. The drop-in is still generated from ``merged``
     alone — this keeps the fix local to the fetch, and the caller decides
     what to do about the accumulated drift (``run_setup`` raises at the end).
+
+    ``provider`` is opened once per ``run_setup`` and shared across
+    workloads. ``list_cache`` memoizes ``list_secrets`` responses across
+    workloads in the same run, so retried fetches don't re-hit Infisical
+    for sources already resolved.
     """
     from psi.provider import mapping_cache_bytes, parse_mapping
     from psi.providers.infisical import InfisicalProvider
@@ -227,69 +322,68 @@ def _fetch_and_register_infisical(
 
     infisical_config = InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
     workload = settings.workloads[workload_name]
-    provider = InfisicalProvider(settings)
-    provider.open()
 
-    try:
-        merged: dict[str, str] = {}
-        values: dict[str, bytes] = {}
-        for source in workload.secrets:
-            project = infisical_config.projects[source.project]
-            auth = resolve_auth(project, infisical_config)
-            assert provider._client is not None
-            token = provider._client.ensure_token(auth)
+    merged: dict[str, str] = {}
+    values: dict[str, bytes] = {}
+    for source in workload.secrets:
+        project = infisical_config.projects[source.project]
+        auth = resolve_auth(project, infisical_config)
+        assert provider._client is not None
+        token = provider._client.ensure_token(auth)
 
-            logger.info(
-                "Fetching project={} path={}",
+        logger.info(
+            "Fetching project={} path={}",
+            source.project,
+            source.path,
+        )
+
+        secrets = _list_secrets_cached(
+            provider._client,
+            token,
+            project.id,
+            project.environment,
+            source.path,
+            recursive=source.recursive,
+            expand_references=source.expand_references,
+            include_imports=source.include_imports,
+            memo=list_cache,
+        )
+
+        for secret in secrets:
+            key = secret["secretKey"]
+            actual_path = secret.get("secretPath", source.path)
+            merged[key] = InfisicalProvider.make_mapping(
                 source.project,
-                source.path,
+                actual_path,
+                key,
             )
+            raw_value = secret.get("secretValue")
+            if raw_value is not None:
+                values[key] = str(raw_value).encode("utf-8")
 
-            secrets = provider._client.list_secrets(
-                token,
-                project.id,
-                project.environment,
-                source.path,
-                recursive=source.recursive,
-            )
+        logger.info("Found {} secrets", len(secrets))
 
-            for secret in secrets:
-                key = secret["secretKey"]
-                actual_path = secret.get("secretPath", source.path)
-                merged[key] = InfisicalProvider.make_mapping(
-                    source.project,
-                    actual_path,
-                    key,
-                )
-                raw_value = secret.get("secretValue")
-                if raw_value is not None:
-                    values[key] = str(raw_value).encode("utf-8")
+    logger.info("Merged: {} unique secrets", len(merged))
+    _register_secrets(settings, workload_name, merged)
 
-            logger.info("Found {} secrets", len(secrets))
+    orphans = _check_workload_drift(workload_name, merged)
+    for orphan in orphans:
+        logger.warning(
+            "Drift: Podman secret '{}' is not in this fetch — the "
+            "drop-in will not reference it. If the key lives in an "
+            "Infisical subfolder, add 'recursive: true' to the source "
+            "in config.yaml. Otherwise remove the stale secret: "
+            "podman secret rm {}",
+            orphan,
+            orphan,
+        )
+    drift.extend(orphans)
 
-        logger.info("Merged: {} unique secrets", len(merged))
-        _register_secrets(settings, workload_name, merged)
+    _generate_drop_in(settings, workload_name, merged)
 
-        orphans = _check_workload_drift(workload_name, merged)
-        for orphan in orphans:
-            logger.warning(
-                "Drift: Podman secret '{}' is not in this fetch — the "
-                "drop-in will not reference it. If the key lives in an "
-                "Infisical subfolder, add 'recursive: true' to the source "
-                "in config.yaml. Otherwise remove the stale secret: "
-                "podman secret rm {}",
-                orphan,
-                orphan,
-            )
-        drift.extend(orphans)
-
-        _generate_drop_in(settings, workload_name, merged)
-
-        for key, value in values.items():
-            mapping_bytes = mapping_cache_bytes(parse_mapping(merged[key]))
-            values_by_mapping[mapping_bytes] = value
-    finally:
-        provider.close()
+    for key, value in values.items():
+        mapping_bytes = mapping_cache_bytes(parse_mapping(merged[key]))
+        values_by_mapping[mapping_bytes] = value
 
 
 def _register_secrets(

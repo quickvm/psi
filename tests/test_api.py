@@ -66,6 +66,41 @@ class TestListSecrets:
         params = mock_get.call_args.kwargs["params"]
         assert params["recursive"] == "true"
 
+    def test_expand_and_imports_default_true(self, tmp_path: Path) -> None:
+        """Defaults preserve historical behavior for non-setup callers."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secrets": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.list_secrets("tok", "proj", "prod", "/app")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["expandSecretReferences"] == "true"
+        assert params["includeImports"] == "true"
+
+    def test_expand_and_imports_false_passthrough(self, tmp_path: Path) -> None:
+        """Setup opts out per-source to make Infisical fetches lighter."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secrets": []}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.list_secrets(
+                    "tok",
+                    "proj",
+                    "prod",
+                    "/app",
+                    expand_references=False,
+                    include_imports=False,
+                )
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["expandSecretReferences"] == "false"
+        assert params["includeImports"] == "false"
+
     def test_raises_on_error(self, tmp_path: Path) -> None:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -89,6 +124,40 @@ class TestGetSecret:
                 value = client.get_secret("tok", "proj", "prod", "/", "DB_PASS")
 
         assert value == "my-password"
+
+    def test_expand_and_imports_default_true(self, tmp_path: Path) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secret": {"secretValue": "v"}}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.get_secret("tok", "proj", "prod", "/", "DB_PASS")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["expandSecretReferences"] == "true"
+        assert params["includeImports"] == "true"
+
+    def test_expand_and_imports_false_passthrough(self, tmp_path: Path) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"secret": {"secretValue": "v"}}
+        mock_resp.raise_for_status = MagicMock()
+
+        with _client(tmp_path) as client:
+            with patch.object(client._client, "get", return_value=mock_resp) as mock_get:
+                client.get_secret(
+                    "tok",
+                    "proj",
+                    "prod",
+                    "/",
+                    "DB_PASS",
+                    expand_references=False,
+                    include_imports=False,
+                )
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["expandSecretReferences"] == "false"
+        assert params["includeImports"] == "false"
 
 
 class TestIssueCertificate:
