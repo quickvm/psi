@@ -1,18 +1,91 @@
-"""Infisical REST API client using sync httpx."""
+"""Infisical's API, through Infisical's own Python SDK.
+
+The client keeps PSI's interface, where each call takes a token from PSI's token file cache,
+and the SDK makes the requests, retries them and raises their errors. What the SDK does not
+cover (batch creates, certificates, GCP and Azure logins) goes through its request layer too
+(``InfisicalSDKClient.api``), so every call to Infisical shares one session. That session gets
+what the SDK leaves unset: a timeout on every request, and the CA bundle PSI is given.
+"""
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import requests
+from infisical_sdk import InfisicalError, InfisicalSDKClient
+from infisical_sdk.infisical_requests import APIError
+from requests.adapters import HTTPAdapter
 
-from psi.providers.infisical.auth import authenticate
+from psi.errors import ProviderError
+from psi.providers.infisical.auth import login
 from psi.providers.infisical.token import read_cached_token, write_token_cache
 
 if TYPE_CHECKING:
-    from psi.providers.infisical.models import AuthConfig
+    from collections.abc import Iterator, Mapping
+    from pathlib import Path
+
+    from psi.providers.infisical.models import AuthConfig, InfisicalConfig
 
 _TIMEOUT = 30.0
+
+
+class InfisicalAPIError(ProviderError):
+    """Infisical refused a request, or could not be reached (``status_code`` None)."""
+
+    def __init__(self, message: str, status_code: int | None) -> None:
+        super().__init__(message, provider_name="infisical")
+        self.status_code = status_code
+
+
+class _Timeout(HTTPAdapter):
+    """Gives every request a timeout, which the SDK leaves unset."""
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        stream: bool = False,
+        timeout: Any = None,
+        verify: bool | str = True,
+        cert: Any = None,
+        proxies: Mapping[str, str] | None = None,
+    ) -> requests.Response:
+        return _deliver(
+            self,
+            request,
+            stream=stream,
+            timeout=timeout or _TIMEOUT,
+            verify=verify,
+            cert=cert,
+            proxies=proxies,
+        )
+
+
+def _deliver(adapter: HTTPAdapter, request: requests.PreparedRequest, **kwargs: Any) -> Any:
+    """Send ``request`` over the network; the tests stand an Infisical in here."""
+    return HTTPAdapter.send(adapter, request, **kwargs)
+
+
+def _trust(verify_ssl: bool, ca_cert: Path | None) -> bool | str:
+    """What requests verifies Infisical's certificate with.
+
+    requests ignores ``SSL_CERT_FILE``, which PSI's container units set to the CA bundle
+    they mount (``ca_cert`` in PSI's config), so it is passed on here.
+    """
+    if not verify_ssl:
+        return False
+    if ca_cert is not None:
+        return str(ca_cert)
+    return os.environ.get("SSL_CERT_FILE") or True
+
+
+class _Raw:
+    """Leaves a response the SDK has no model for as the JSON it was."""
+
+    @staticmethod
+    def from_dict(data: dict[str, Any]) -> dict[str, Any]:
+        return data
 
 
 class InfisicalClient:
@@ -21,27 +94,29 @@ class InfisicalClient:
     def __init__(
         self,
         api_url: str,
-        state_dir: Any,
+        state_dir: Path,
         token_ttl: int,
         verify_ssl: bool = True,
+        ca_cert: Path | None = None,
     ) -> None:
-        self.api_url = api_url
+        self.api_url = api_url.rstrip("/")
         self.state_dir = state_dir
         self.token_ttl = token_ttl
-        self._client = httpx.Client(timeout=_TIMEOUT, verify=verify_ssl)
-
-    def close(self) -> None:
-        self._client.close()
+        # cache_ttl=0: PSI's encrypted cache is the only copy of a value.
+        self._sdk = InfisicalSDKClient(host=self.api_url, cache_ttl=0)
+        session = self._sdk.api.session
+        session.mount("https://", _Timeout())
+        session.mount("http://", _Timeout())
+        session.verify = _trust(verify_ssl, ca_cert)
 
     @classmethod
-    def from_settings(cls, settings: Any) -> InfisicalClient:
-        """Create a client from PsiSettings."""
-        return cls(
-            settings.api_url,
-            settings.state_dir,
-            settings.token.ttl,
-            getattr(settings, "verify_ssl", True),
-        )
+    def for_config(cls, config: InfisicalConfig, state_dir: Path) -> InfisicalClient:
+        """A client for the instance ``config`` names, caching tokens in ``state_dir``."""
+        return cls(config.api_url, state_dir, config.token.ttl, config.verify_ssl, config.ca_cert)
+
+    def close(self) -> None:
+        self._sdk.close()
+        self._sdk.api.session.close()
 
     def __enter__(self) -> InfisicalClient:
         return self
@@ -49,12 +124,29 @@ class InfisicalClient:
     def __exit__(self, *args: object) -> None:
         self.close()
 
+    @contextmanager
+    def _calling(self, what: str, token: str | None = None) -> Iterator[None]:
+        """Run an SDK call, as ``token`` when given, raising :class:`InfisicalAPIError`."""
+        if token is not None:
+            self._sdk.set_token(token)
+        try:
+            yield
+        except APIError as e:
+            said = e.response.get("message") if isinstance(e.response, dict) else None
+            detail = f": {said}" if said else ""
+            msg = f"Infisical refused to {what} (HTTP {e.status_code}){detail}"
+            raise InfisicalAPIError(msg, e.status_code) from e
+        except (InfisicalError, requests.RequestException) as e:
+            msg = f"Cannot reach Infisical at {self.api_url} to {what}: {e}"
+            raise InfisicalAPIError(msg, None) from e
+
     def ensure_token(self, auth: AuthConfig) -> str:
         """Get a valid token, authenticating if cache is expired."""
         cached = read_cached_token(self.state_dir, auth)
         if cached:
             return cached
-        token, expires_in = authenticate(self._client, self.api_url, auth)
+        with self._calling(f"log in with {auth.method}"):
+            token, expires_in = login(self._sdk, auth)
         write_token_cache(self.state_dir, auth, token, expires_in, self.token_ttl)
         return token
 
@@ -75,21 +167,17 @@ class InfisicalClient:
         Returns:
             List of secret objects with secretKey, secretValue, secretPath, etc.
         """
-        resp = self._client.get(
-            f"{self.api_url}/api/v4/secrets",
-            params={
-                "projectId": project_id,
-                "environment": environment,
-                "secretPath": secret_path,
-                "recursive": str(recursive).lower(),
-                "viewSecretValue": "true",
-                "expandSecretReferences": "true",
-                "includeImports": "true",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()["secrets"]
+        with self._calling(f"list {secret_path}", token):
+            listing = self._sdk.secrets.list_secrets(
+                environment_slug=environment,
+                secret_path=secret_path,
+                project_id=project_id,
+                expand_secret_references=True,
+                view_secret_value=True,
+                recursive=recursive,
+                include_imports=True,
+            )
+        return [secret.to_dict() for secret in listing.secrets]
 
     def get_secret(
         self,
@@ -104,20 +192,17 @@ class InfisicalClient:
         Returns:
             The secret value as a string.
         """
-        resp = self._client.get(
-            f"{self.api_url}/api/v4/secrets/{secret_name}",
-            params={
-                "projectId": project_id,
-                "environment": environment,
-                "secretPath": secret_path,
-                "viewSecretValue": "true",
-                "expandSecretReferences": "true",
-                "includeImports": "true",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()["secret"]["secretValue"]
+        with self._calling(f"read {secret_name} at {secret_path}", token):
+            secret = self._sdk.secrets.get_secret_by_name(
+                secret_name=secret_name,
+                environment_slug=environment,
+                secret_path=secret_path,
+                project_id=project_id,
+                expand_secret_references=True,
+                include_imports=True,
+                view_secret_value=True,
+            )
+        return secret.secretValue
 
     # --- Folder methods ---
 
@@ -133,26 +218,20 @@ class InfisicalClient:
         Splits the path into segments and creates each level.
         For example, /atuin creates folder 'atuin' at path '/'.
         """
-        if folder_path in ("/", ""):
-            return
-
         segments = [s for s in folder_path.strip("/").split("/") if s]
         current = "/"
         for segment in segments:
-            resp = self._client.post(
-                f"{self.api_url}/api/v1/folders",
-                json={
-                    "name": segment,
-                    "path": current,
-                    "workspaceId": project_id,
-                    "environment": environment,
-                },
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code in (400, 409):
-                pass  # folder already exists
-            else:
-                resp.raise_for_status()
+            try:
+                with self._calling(f"create folder {segment} in {current}", token):
+                    self._sdk.folders.create_folder(
+                        name=segment,
+                        environment_slug=environment,
+                        project_id=project_id,
+                        path=current,
+                    )
+            except InfisicalAPIError as e:
+                if e.status_code not in (400, 409):  # 400 and 409: it exists already
+                    raise
             current = f"{current}{segment}/" if current.endswith("/") else f"{current}/{segment}/"
 
     # --- Secret write methods ---
@@ -171,19 +250,15 @@ class InfisicalClient:
         Returns:
             The created secret object.
         """
-        resp = self._client.post(
-            f"{self.api_url}/api/v4/secrets/{secret_name}",
-            json={
-                "projectId": project_id,
-                "environment": environment,
-                "secretPath": secret_path,
-                "secretValue": secret_value,
-                "type": "shared",
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        with self._calling(f"create {secret_name} in {secret_path}", token):
+            created = self._sdk.secrets.create_secret_by_name(
+                secret_name=secret_name,
+                secret_path=secret_path,
+                environment_slug=environment,
+                project_id=project_id,
+                secret_value=secret_value,
+            )
+        return created.to_dict()
 
     def create_secrets_batch(
         self,
@@ -201,18 +276,14 @@ class InfisicalClient:
         Returns:
             The API response with created secrets.
         """
-        resp = self._client.post(
-            f"{self.api_url}/api/v4/secrets/batch",
-            json={
-                "projectId": project_id,
-                "environment": environment,
-                "secretPath": secret_path,
-                "secrets": secrets,
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        body = {
+            "projectId": project_id,
+            "environment": environment,
+            "secretPath": secret_path,
+            "secrets": secrets,
+        }
+        with self._calling(f"create {len(secrets)} secrets in {secret_path}", token):
+            return self._sdk.api.post(path="/api/v4/secrets/batch", json=body, model=_Raw).data
 
     def update_secret(
         self,
@@ -228,18 +299,15 @@ class InfisicalClient:
         Returns:
             The updated secret object.
         """
-        resp = self._client.patch(
-            f"{self.api_url}/api/v4/secrets/{secret_name}",
-            json={
-                "projectId": project_id,
-                "environment": environment,
-                "secretPath": secret_path,
-                "secretValue": secret_value,
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()
+        with self._calling(f"update {secret_name} in {secret_path}", token):
+            updated = self._sdk.secrets.update_secret_by_name(
+                current_secret_name=secret_name,
+                project_id=project_id,
+                secret_path=secret_path,
+                environment_slug=environment,
+                secret_value=secret_value,
+            )
+        return updated.to_dict()
 
     # --- TLS certificate methods ---
 
@@ -266,14 +334,12 @@ class InfisicalClient:
             attributes["ttl"] = ttl
         if key_algorithm:
             attributes["keyAlgorithm"] = key_algorithm
-
-        resp = self._client.post(
-            f"{self.api_url}/api/v1/cert-manager/certificates",
-            json={"profileId": profile_id, "attributes": attributes},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()["certificate"]
+        body = {"profileId": profile_id, "attributes": attributes}
+        with self._calling(f"issue a certificate for {common_name}", token):
+            issued = self._sdk.api.post(
+                path="/api/v1/cert-manager/certificates", json=body, model=_Raw
+            )
+        return issued.data["certificate"]
 
     def renew_certificate(
         self,
@@ -285,9 +351,7 @@ class InfisicalClient:
         Returns:
             Renewed certificate object (same structure as issue).
         """
-        resp = self._client.post(
-            f"{self.api_url}/api/v1/cert-manager/certificates/{certificate_id}/renew",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return resp.json()["certificate"]
+        path = f"/api/v1/cert-manager/certificates/{certificate_id}/renew"
+        with self._calling(f"renew certificate {certificate_id}", token):
+            renewed = self._sdk.api.post(path=path, json=None, model=_Raw)
+        return renewed.data["certificate"]

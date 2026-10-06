@@ -1,17 +1,19 @@
-"""Tests for InfisicalClient write methods (create, batch, update)."""
+"""Tests for InfisicalClient's writes, through Infisical's SDK."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
-from psi.providers.infisical.api import InfisicalClient
+from psi.providers.infisical.api import InfisicalAPIError, InfisicalClient
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from tests.fake_infisical import FakeInfisical
+
+APP = ("proj", "prod", "/app")
 
 
 def _client(tmp_path: Path) -> InfisicalClient:
@@ -19,66 +21,55 @@ def _client(tmp_path: Path) -> InfisicalClient:
 
 
 class TestCreateSecret:
-    def test_posts_correct_payload(self, tmp_path: Path) -> None:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"secret": {"secretKey": "DB_HOST"}}
-        mock_resp.raise_for_status = MagicMock()
-
+    def test_creates_the_secret(self, tmp_path: Path, infisical: FakeInfisical) -> None:
         with _client(tmp_path) as client:
-            with patch.object(client._client, "post", return_value=mock_resp) as mock_post:
-                client.create_secret("tok", "proj", "prod", "/app", "DB_HOST", "localhost")
+            created = client.create_secret("access-token-1", *APP, "DB_HOST", "localhost")
+        assert created["secretKey"] == "DB_HOST"
+        assert infisical.folders[APP] == {"DB_HOST": "localhost"}
+        (sent,) = infisical.sent
+        assert (sent.method, sent.path) == ("POST", "/api/v3/secrets/raw/DB_HOST")
+        assert sent.body["workspaceId"] == "proj"
+        assert sent.body["type"] == "shared"
 
-        call_json = mock_post.call_args.kwargs["json"]
-        assert call_json["projectId"] == "proj"
-        assert call_json["environment"] == "prod"
-        assert call_json["secretPath"] == "/app"
-        assert call_json["secretValue"] == "localhost"
-        assert call_json["type"] == "shared"
-        assert "/api/v4/secrets/DB_HOST" in str(mock_post.call_args)
-
-    def test_raises_on_error(self, tmp_path: Path) -> None:
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "409", request=MagicMock(), response=MagicMock()
-        )
-
-        with _client(tmp_path) as client:
-            with patch.object(client._client, "post", return_value=mock_resp):
-                with pytest.raises(httpx.HTTPStatusError):
-                    client.create_secret("tok", "proj", "prod", "/", "X", "val")
+    def test_raises_on_error(self, tmp_path: Path, infisical: FakeInfisical) -> None:
+        with _client(tmp_path) as client, pytest.raises(InfisicalAPIError) as caught:
+            client.create_secret("a-stale-token", *APP, "DB_HOST", "localhost")
+        assert caught.value.status_code == 401
 
 
 class TestCreateSecretsBatch:
-    def test_posts_batch(self, tmp_path: Path) -> None:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"secrets": []}
-        mock_resp.raise_for_status = MagicMock()
-
-        secrets = [
+    def test_posts_batch(self, tmp_path: Path, infisical: FakeInfisical) -> None:
+        batch = [
             {"secretKey": "A", "secretValue": "1"},
             {"secretKey": "B", "secretValue": "2"},
         ]
-
         with _client(tmp_path) as client:
-            with patch.object(client._client, "post", return_value=mock_resp) as mock_post:
-                client.create_secrets_batch("tok", "proj", "prod", "/", secrets)
-
-        call_json = mock_post.call_args.kwargs["json"]
-        assert call_json["secrets"] == secrets
-        assert "/api/v4/secrets/batch" in str(mock_post.call_args)
+            result = client.create_secrets_batch("access-token-1", *APP, batch)
+        assert [s["secretKey"] for s in result["secrets"]] == ["A", "B"]
+        assert infisical.folders[APP] == {"A": "1", "B": "2"}
+        (sent,) = infisical.sent
+        assert sent.path == "/api/v4/secrets/batch"
+        assert sent.body == {
+            "projectId": "proj",
+            "environment": "prod",
+            "secretPath": "/app",
+            "secrets": batch,
+        }
 
 
 class TestUpdateSecret:
-    def test_patches_correct_payload(self, tmp_path: Path) -> None:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"secret": {"secretKey": "DB_HOST"}}
-        mock_resp.raise_for_status = MagicMock()
-
+    def test_updates_the_value(self, tmp_path: Path, infisical: FakeInfisical) -> None:
+        infisical.folders[APP] = {"DB_HOST": "old-host"}
         with _client(tmp_path) as client:
-            with patch.object(client._client, "patch", return_value=mock_resp) as mock_patch:
-                client.update_secret("tok", "proj", "prod", "/app", "DB_HOST", "new-host")
+            client.update_secret("access-token-1", *APP, "DB_HOST", "new-host")
+        assert infisical.folders[APP] == {"DB_HOST": "new-host"}
+        assert (infisical.sent[0].method, infisical.sent[0].path) == (
+            "PATCH",
+            "/api/v3/secrets/raw/DB_HOST",
+        )
 
-        call_json = mock_patch.call_args.kwargs["json"]
-        assert call_json["secretValue"] == "new-host"
-        assert call_json["projectId"] == "proj"
-        assert "/api/v4/secrets/DB_HOST" in str(mock_patch.call_args)
+    def test_a_missing_secret_is_a_404(self, tmp_path: Path, infisical: FakeInfisical) -> None:
+        infisical.folders[APP] = {}
+        with _client(tmp_path) as client, pytest.raises(InfisicalAPIError) as caught:
+            client.update_secret("access-token-1", *APP, "DB_HOST", "new-host")
+        assert caught.value.status_code == 404
