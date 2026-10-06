@@ -44,12 +44,7 @@ def issue_all(settings: PsiSettings) -> None:
     tls = _require_tls(settings)
 
     inf_config = _get_infisical_config(settings)
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         for cert_name, cert_config in tls.certificates.items():
             console.print(f"\n[bold]Certificate: {cert_name}[/bold]")
@@ -67,12 +62,7 @@ def renew_due(settings: PsiSettings) -> None:
     any_renewed = False
 
     inf_config = _get_infisical_config(settings)
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         for cert_name, cert_config in tls.certificates.items():
             state = _load_state(state_dir, cert_name)

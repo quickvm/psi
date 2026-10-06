@@ -118,7 +118,7 @@ def generate_native_tls_renew_service(psi_path: str) -> str:
         "\n"
         "[Service]\n"
         "Type=oneshot\n"
-        f"ExecStart={psi_path} tls renew\n"
+        f"ExecStart={psi_path} infisical tls renew\n"
     )
 
 
@@ -307,7 +307,7 @@ def generate_container_tls_renew_quadlet(image: str, settings: PsiSettings) -> s
         "[Container]",
         "ContainerName=psi-tls-renew",
         f"Image={image}",
-        "Exec=tls renew",
+        "Exec=infisical tls renew",
         "Network=host",
         f"Volume={config_dir}:{config_dir}:ro",
         f"Volume={state}:{state}:Z",

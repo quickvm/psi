@@ -11,6 +11,7 @@ import pytest
 from psi.errors import ProviderError
 from psi.models import SecretSource, SystemdScope, WorkloadConfig
 from psi.providers.infisical import InfisicalProvider
+from psi.providers.infisical.api import InfisicalAPIError
 from psi.settings import PsiSettings
 from psi.setup import (
     _RETRY_DELAYS,
@@ -176,175 +177,95 @@ class TestTemplateUnitDropIn:
         assert "Secret=windmill-worker@--DB_HOST" in content
 
 
+def _unreachable() -> InfisicalAPIError:
+    return InfisicalAPIError("Cannot reach Infisical at https://x to list /app: refused", None)
+
+
+def _refused(status: int) -> InfisicalAPIError:
+    return InfisicalAPIError(
+        f"Infisical refused to log in with universal-auth (HTTP {status})", status
+    )
+
+
 class TestIsRetryable:
-    def test_connect_error_is_retryable(self) -> None:
-        assert _is_retryable(httpx.ConnectError("refused"))
+    def test_an_unreachable_infisical_is_retryable(self) -> None:
+        assert _is_retryable(_unreachable())
 
-    def test_502_is_retryable(self) -> None:
-        request = httpx.Request("GET", "http://test")
-        response = httpx.Response(502, request=request)
-        exc = httpx.HTTPStatusError("bad gateway", request=request, response=response)
-        assert _is_retryable(exc)
+    @pytest.mark.parametrize("status", [404, 502, 503])
+    def test_a_starting_infisical_is_retryable(self, status: int) -> None:
+        assert _is_retryable(_refused(status))
 
-    def test_503_is_retryable(self) -> None:
-        request = httpx.Request("GET", "http://test")
-        response = httpx.Response(503, request=request)
-        exc = httpx.HTTPStatusError("unavailable", request=request, response=response)
-        assert _is_retryable(exc)
+    @pytest.mark.parametrize("status", [400, 401, 403, 500])
+    def test_a_refusal_is_not_retryable(self, status: int) -> None:
+        assert not _is_retryable(_refused(status))
 
-    def test_404_is_retryable(self) -> None:
-        request = httpx.Request("GET", "http://test")
-        response = httpx.Response(404, request=request)
-        exc = httpx.HTTPStatusError("not found", request=request, response=response)
-        assert _is_retryable(exc)
-
-    def test_401_is_not_retryable(self) -> None:
-        request = httpx.Request("GET", "http://test")
-        response = httpx.Response(401, request=request)
-        exc = httpx.HTTPStatusError("unauthorized", request=request, response=response)
-        assert not _is_retryable(exc)
+    def test_other_provider_errors_are_not_retryable(self) -> None:
+        assert not _is_retryable(ProviderError("no AWS credentials", provider_name="infisical"))
 
     def test_other_exception_is_not_retryable(self) -> None:
         assert not _is_retryable(ValueError("nope"))
 
 
+def _myapp(tmp_path: Path) -> PsiSettings:
+    return _make_settings(
+        tmp_path,
+        workloads={
+            "myapp": WorkloadConfig(
+                provider="infisical",
+                secrets=[SecretSource(project="myproject", path="/app")],
+            ),
+        },
+    )
+
+
 class TestSetupRetry:
-    def test_retries_on_connect_error_then_succeeds(self, tmp_path: Path) -> None:
+    def test_retries_while_unreachable_then_succeeds(self, tmp_path: Path) -> None:
         call_count = 0
 
         def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise httpx.ConnectError("refused")
-
-        settings = _make_settings(
-            tmp_path,
-            workloads={
-                "myapp": WorkloadConfig(
-                    provider="infisical",
-                    secrets=[SecretSource(project="myproject", path="/app")],
-                ),
-            },
-        )
+                raise _unreachable()
 
         with (
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
 
         assert call_count == 3
 
     def test_raises_after_all_retries_exhausted(self, tmp_path: Path) -> None:
-        settings = _make_settings(
-            tmp_path,
-            workloads={
-                "myapp": WorkloadConfig(
-                    provider="infisical",
-                    secrets=[SecretSource(project="myproject", path="/app")],
-                ),
-            },
-        )
-
-        with (
-            patch(
-                "psi.setup._fetch_and_register_infisical",
-                side_effect=httpx.ConnectError("refused"),
-            ),
-            patch("psi.setup.time.sleep"),
-            pytest.raises(httpx.ConnectError, match="refused"),
-        ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
-
-    def test_non_retryable_error_raises_immediately(self, tmp_path: Path) -> None:
-        request = httpx.Request("GET", "http://test")
-        response = httpx.Response(401, request=request)
-        exc = httpx.HTTPStatusError("unauthorized", request=request, response=response)
-
-        settings = _make_settings(
-            tmp_path,
-            workloads={
-                "myapp": WorkloadConfig(
-                    provider="infisical",
-                    secrets=[SecretSource(project="myproject", path="/app")],
-                ),
-            },
-        )
-
-        with (
-            patch(
-                "psi.setup._fetch_and_register_infisical",
-                side_effect=exc,
-            ),
-            pytest.raises(httpx.HTTPStatusError, match="unauthorized"),
-        ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
-
-    def test_auth_502_retries_then_raises_provider_error(self, tmp_path: Path) -> None:
-        """Auth endpoint 502 wrapped as ProviderError is retried via __cause__."""
-        request = httpx.Request("POST", "http://test/api/v1/auth/universal-auth/login")
-        response = httpx.Response(502, request=request)
         call_count = 0
 
         def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
-            http_err = httpx.HTTPStatusError("502", request=request, response=response)
-            raise ProviderError(
-                "Infisical authentication failed (HTTP 502): ...",
-                provider_name="infisical",
-            ) from http_err
-
-        settings = _make_settings(
-            tmp_path,
-            workloads={
-                "myapp": WorkloadConfig(
-                    provider="infisical",
-                    secrets=[SecretSource(project="myproject", path="/app")],
-                ),
-            },
-        )
+            raise _refused(502)
 
         with (
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
-            pytest.raises(ProviderError, match="authentication failed"),
+            pytest.raises(InfisicalAPIError, match="HTTP 502"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
 
         assert call_count == len(_RETRY_DELAYS) + 1
 
-    def test_auth_401_wrapped_as_provider_error_not_retried(self, tmp_path: Path) -> None:
-        """Auth 401 wrapped as ProviderError is non-retryable — fails immediately."""
-        request = httpx.Request("POST", "http://test/api/v1/auth/universal-auth/login")
-        response = httpx.Response(401, request=request)
+    def test_a_refused_login_raises_immediately(self, tmp_path: Path) -> None:
         call_count = 0
 
         def mock_fetch(settings, workload_name, cache_updates, drift):
             nonlocal call_count
             call_count += 1
-            http_err = httpx.HTTPStatusError("401", request=request, response=response)
-            raise ProviderError(
-                "Infisical authentication failed (HTTP 401): invalid credentials",
-                provider_name="infisical",
-            ) from http_err
-
-        settings = _make_settings(
-            tmp_path,
-            workloads={
-                "myapp": WorkloadConfig(
-                    provider="infisical",
-                    secrets=[SecretSource(project="myproject", path="/app")],
-                ),
-            },
-        )
+            raise _refused(401)
 
         with (
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
-            pytest.raises(ProviderError, match="invalid credentials"),
+            pytest.raises(InfisicalAPIError, match="HTTP 401"),
         ):
-            _setup_infisical_workload(settings, "myapp", {}, [])
+            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
 
         assert call_count == 1
 
