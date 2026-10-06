@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class DeployMode(StrEnum):
@@ -39,11 +42,33 @@ def socket_path(scope: SystemdScope) -> Path:
 
 
 class SecretSource(BaseModel):
-    """A source of secrets: a project + folder path (Infisical workloads)."""
+    """A source of secrets: a project + folder path (Infisical workloads).
+
+    Without ``env``, the container gets every secret in the folder, each as the environment
+    variable its key names. With it, only the keys it maps, each as the variable it names
+    (``{"TS_AUTHKEY": "TAILSCALE_AUTHKEY"}``), and setup fails when the folder lacks one.
+    """
 
     project: str
     path: str = "/"
     recursive: bool = False
+    env: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def validate_env(self) -> SecretSource:
+        if self.env is None:
+            return self
+        if self.recursive:
+            msg = "env picks keys from one folder; it cannot be combined with recursive"
+            raise ValueError(msg)
+        bad = [name for name in self.env if not _ENV_NAME.fullmatch(name)]
+        if bad:
+            msg = f"not environment variable names: {', '.join(bad)}"
+            raise ValueError(msg)
+        if not all(self.env.values()):
+            msg = "every environment variable in env needs a key to take its value from"
+            raise ValueError(msg)
+        return self
 
 
 class WorkloadConfig(BaseModel):
