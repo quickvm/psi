@@ -50,7 +50,7 @@ workloads:
 
 | Method | Config Fields | Use Case |
 |---|---|---|
-| `universal-auth` | `client_id`, `client_secret` | Machine identities with static credentials |
+| `universal-auth` | `client_id`, and `client_secret` or `client_secret_file` | Machine identities with static credentials; the file holds only the secret, so the config need not |
 | `aws-iam` | `identity_id` | EC2/ECS/Lambda with IAM roles; the identity's STS endpoint must be its region's (below) |
 | `gcp` | `identity_id` | GCE/GKE with service accounts |
 | `azure` | `identity_id` | Azure VMs with managed identity |
