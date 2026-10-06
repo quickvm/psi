@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-import httpx
-
 from psi.errors import ProviderError, SecretNotFoundError
-from psi.providers.infisical.api import InfisicalClient
+from psi.providers.infisical.api import InfisicalAPIError, InfisicalClient
 from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 
 if TYPE_CHECKING:
@@ -27,12 +25,7 @@ class InfisicalProvider:
         self._client: InfisicalClient | None = None
 
     def open(self) -> None:
-        self._client = InfisicalClient(
-            api_url=self.config.api_url,
-            state_dir=self.state_dir,
-            token_ttl=self.config.token.ttl,
-            verify_ssl=self.config.verify_ssl,
-        )
+        self._client = InfisicalClient.for_config(self.config, self.state_dir)
 
     def close(self) -> None:
         if self._client:
@@ -72,25 +65,20 @@ class InfisicalProvider:
                 secret_path,
                 secret_name,
             )
-        except httpx.ConnectError as e:
-            msg = f"Cannot reach Infisical API at {self.config.api_url}: {e}"
-            raise ProviderError(msg, provider_name="infisical") from e
-        except httpx.HTTPStatusError as e:
-            status = e.response.status_code
-            if status in (401, 403):
+        except InfisicalAPIError as e:
+            if e.status_code in (401, 403):
                 msg = (
                     f"Authentication failed for project '{project_alias}'. "
-                    "Check your auth configuration."
+                    f"Check your auth configuration. ({e})"
                 )
                 raise ProviderError(msg, provider_name="infisical") from e
-            if status == 404:
+            if e.status_code == 404:
                 msg = (
                     f"Secret '{secret_name}' not found at "
                     f"path '{secret_path}' in project '{project_alias}'"
                 )
                 raise SecretNotFoundError(msg) from e
-            msg = f"Infisical API error ({status}): {e.response.text[:200]}"
-            raise ProviderError(msg, provider_name="infisical") from e
+            raise
         return value.encode()
 
     @staticmethod

@@ -63,12 +63,7 @@ def login(config: ConfigOption = None) -> None:
         if project.auth:
             auth_configs[f"project:{name}"] = project.auth
 
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         for label, auth in auth_configs.items():
             try:
@@ -115,12 +110,7 @@ def env_cmd(
     auth = resolve_auth(proj, inf_config)
     env = environment or proj.environment
 
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         token = client.ensure_token(auth)
         secrets = client.list_secrets(token, proj.id, env, secret_path)
@@ -173,12 +163,7 @@ def write_file(
 
     auth = resolve_auth(proj, inf_config)
 
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         token = client.ensure_token(auth)
         value = client.get_secret(
@@ -321,12 +306,7 @@ def _run_import_and_display(
         console.print("[yellow]No secrets found to import.[/yellow]")
         raise typer.Exit(0)
 
-    client = InfisicalClient(
-        inf_config.api_url,
-        settings.state_dir,
-        inf_config.token.ttl,
-        inf_config.verify_ssl,
-    )
+    client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         token = client.ensure_token(auth)
         result = run_import(

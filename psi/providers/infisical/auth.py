@@ -1,22 +1,27 @@
 """Infisical authentication methods.
 
-Each method hits POST /api/v1/auth/{method}/login and returns
-(access_token, expires_in_seconds).
+Universal auth and AWS IAM go through Infisical's SDK. The SDK has no GCP or Azure login, so
+for those PSI fetches the instance's identity token from the cloud's metadata service and
+posts it to Infisical's login through the SDK's request layer. Each returns
+``(access_token, expires_in_seconds)``.
+
+The SDK signs AWS logins for the region's STS endpoint (``sts.<region>.amazonaws.com``, the
+region from ``AWS_REGION`` or the instance metadata), so an AWS identity in Infisical must name
+that endpoint as its STS endpoint.
 """
 
 from __future__ import annotations
 
-import base64
-import json
+from typing import TYPE_CHECKING
 
 import httpx
+from infisical_sdk.api_types import MachineIdentityLoginResponse
 
 from psi.errors import ProviderError
 from psi.providers.infisical.models import AuthConfig, AuthMethod
 
-# STS endpoint for AWS IAM auth — global endpoint works from any region
-_AWS_STS_ENDPOINT = "https://sts.amazonaws.com"
-_AWS_STS_BODY = "Action=GetCallerIdentity&Version=2011-06-15"
+if TYPE_CHECKING:
+    from infisical_sdk import InfisicalSDKClient
 
 # GCP metadata server for identity tokens
 _GCP_METADATA_URL = (
@@ -26,150 +31,91 @@ _GCP_METADATA_URL = (
 # Azure IMDS for managed identity tokens
 _AZURE_IMDS_URL = "http://169.254.169.254/metadata/identity/oauth2/token"
 
+_METADATA_TIMEOUT = 10.0
 
-def authenticate(
-    client: httpx.Client,
-    api_url: str,
-    auth: AuthConfig,
-) -> tuple[str, int]:
-    """Dispatch to the correct auth method.
+
+def login(sdk: InfisicalSDKClient, auth: AuthConfig) -> tuple[str, int]:
+    """Log ``sdk`` in with ``auth``.
 
     Returns:
         Tuple of (access_token, expires_in_seconds).
     """
     match auth.method:
         case AuthMethod.UNIVERSAL:
-            return _universal_login(client, api_url, auth)
+            assert auth.client_id is not None and auth.client_secret is not None
+            response = sdk.auth.universal_auth.login(
+                client_id=auth.client_id, client_secret=auth.client_secret
+            )
         case AuthMethod.AWS_IAM:
-            return _aws_iam_login(client, api_url, auth)
+            assert auth.identity_id is not None
+            _require_aws_credentials()
+            response = sdk.auth.aws_auth.login(identity_id=auth.identity_id)
         case AuthMethod.GCP:
-            return _gcp_login(client, api_url, auth)
+            response = _metadata_login(sdk, "gcp-auth", auth, _gcp_identity_token(auth))
         case AuthMethod.AZURE:
-            return _azure_login(client, api_url, auth)
+            response = _metadata_login(sdk, "azure-auth", auth, _azure_identity_token())
+    return response.accessToken, int(response.expiresIn)
 
 
-def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
-    """Extract access token and expiry from Infisical auth response."""
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        body = e.response.text[:200]
-        msg = f"Infisical authentication failed (HTTP {e.response.status_code}): {body}"
-        raise ProviderError(msg, provider_name="infisical") from e
-    data = response.json()
-    return data["accessToken"], int(data["expiresIn"])
+def _require_aws_credentials() -> None:
+    """Fail clearly when AWS has no credentials for the instance.
 
+    Checked before the SDK's login, which (1.0.17) raises botocore's NoCredentialsError with
+    a message it does not take, so a missing role surfaces as a TypeError.
+    """
+    import boto3
 
-def _universal_login(
-    client: httpx.Client,
-    api_url: str,
-    auth: AuthConfig,
-) -> tuple[str, int]:
-    resp = client.post(
-        f"{api_url}/api/v1/auth/universal-auth/login",
-        json={
-            "clientId": auth.client_id,
-            "clientSecret": auth.client_secret,
-        },
-    )
-    return _parse_token_response(resp)
-
-
-def _aws_iam_login(
-    client: httpx.Client,
-    api_url: str,
-    auth: AuthConfig,
-) -> tuple[str, int]:
-    """Sign an STS GetCallerIdentity request and send to Infisical."""
-    from botocore.auth import (
-        SigV4Auth,
-    )
-    from botocore.awsrequest import AWSRequest
-    from botocore.session import Session
-
-    session = Session()
-    credentials = session.get_credentials()
-    if credentials is None:
+    if boto3.Session().get_credentials() is None:
         msg = (
-            "No AWS credentials found. "
+            "No AWS credentials found for aws-iam login. "
             "Ensure the instance has an IAM role or credentials are configured."
         )
-        raise RuntimeError(msg)
-    credentials = credentials.get_frozen_credentials()
+        raise ProviderError(msg, provider_name="infisical")
 
-    request = AWSRequest(
-        method="POST",
-        url=_AWS_STS_ENDPOINT,
-        data=_AWS_STS_BODY,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Host": "sts.amazonaws.com",
-        },
+
+def _metadata_login(
+    sdk: InfisicalSDKClient, method: str, auth: AuthConfig, jwt: str
+) -> MachineIdentityLoginResponse:
+    result = sdk.api.post(
+        path=f"/api/v1/auth/{method}/login",
+        json={"identityId": auth.identity_id, "jwt": jwt},
+        model=MachineIdentityLoginResponse,
     )
-    SigV4Auth(credentials, "sts", "us-east-1").add_auth(request)
-
-    encoded_headers = base64.b64encode(json.dumps(dict(request.headers)).encode()).decode()
-    encoded_body = base64.b64encode(_AWS_STS_BODY.encode()).decode()
-
-    resp = client.post(
-        f"{api_url}/api/v1/auth/aws-auth/login",
-        json={
-            "identityId": auth.identity_id,
-            "iamHttpRequestMethod": "POST",
-            "iamRequestUrl": base64.b64encode(_AWS_STS_ENDPOINT.encode()).decode(),
-            "iamRequestBody": encoded_body,
-            "iamRequestHeaders": encoded_headers,
-        },
-    )
-    return _parse_token_response(resp)
+    sdk.set_token(result.data.accessToken)
+    return result.data
 
 
-def _gcp_login(
-    client: httpx.Client,
-    api_url: str,
-    auth: AuthConfig,
-) -> tuple[str, int]:
-    """Fetch a GCP identity token from the metadata server."""
-    jwt_resp = client.get(
+def _metadata(
+    url: str, cloud: str, params: dict[str, str], headers: dict[str, str]
+) -> httpx.Response:
+    """GET ``url`` from a cloud's metadata service, as ProviderError when it fails."""
+    try:
+        response = httpx.get(url, params=params, headers=headers, timeout=_METADATA_TIMEOUT)
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        msg = f"Cannot get an identity token from {cloud}'s metadata service at {url}: {e}"
+        raise ProviderError(msg, provider_name="infisical") from e
+    return response
+
+
+def _gcp_identity_token(auth: AuthConfig) -> str:
+    """The instance's GCP identity token, for Infisical's identity as the audience."""
+    assert auth.identity_id is not None
+    response = _metadata(
         _GCP_METADATA_URL,
+        "GCP",
         params={"audience": auth.identity_id},
         headers={"Metadata-Flavor": "Google"},
     )
-    jwt_resp.raise_for_status()
-    jwt_token = jwt_resp.text
-
-    resp = client.post(
-        f"{api_url}/api/v1/auth/gcp-auth/login",
-        json={
-            "identityId": auth.identity_id,
-            "jwt": jwt_token,
-        },
-    )
-    return _parse_token_response(resp)
+    return response.text
 
 
-def _azure_login(
-    client: httpx.Client,
-    api_url: str,
-    auth: AuthConfig,
-) -> tuple[str, int]:
-    """Fetch an Azure managed identity token from IMDS."""
-    jwt_resp = client.get(
+def _azure_identity_token() -> str:
+    """The instance's Azure managed identity token."""
+    response = _metadata(
         _AZURE_IMDS_URL,
-        params={
-            "api-version": "2018-02-01",
-            "resource": "https://management.azure.com/",
-        },
+        "Azure",
+        params={"api-version": "2018-02-01", "resource": "https://management.azure.com/"},
         headers={"Metadata": "true"},
     )
-    jwt_resp.raise_for_status()
-    jwt_token = jwt_resp.json()["access_token"]
-
-    resp = client.post(
-        f"{api_url}/api/v1/auth/azure-auth/login",
-        json={
-            "identityId": auth.identity_id,
-            "jwt": jwt_token,
-        },
-    )
-    return _parse_token_response(resp)
+    return response.json()["access_token"]

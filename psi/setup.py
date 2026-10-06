@@ -161,12 +161,16 @@ def _open_setup_cache(settings: PsiSettings) -> Cache | None:
 
 
 def _is_retryable(exc: Exception) -> bool:
-    """Check if an exception is retryable (transient network/server error)."""
-    if isinstance(exc, httpx.ConnectError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (404, 502, 503)
-    return False
+    """Check if an exception is retryable (transient network/server error).
+
+    Infisical out of reach (no status) or answering 404, 502 or 503 while it starts is worth
+    another try; anything else, a refused login included, is not.
+    """
+    from psi.providers.infisical.api import InfisicalAPIError
+
+    if not isinstance(exc, InfisicalAPIError):
+        return False
+    return exc.status_code is None or exc.status_code in (404, 502, 503)
 
 
 def _setup_infisical_workload(
@@ -181,10 +185,8 @@ def _setup_infisical_workload(
         try:
             _fetch_and_register_infisical(settings, workload_name, values_by_mapping, drift)
             return
-        except (httpx.ConnectError, httpx.HTTPStatusError, ProviderError) as e:
-            cause = e.__cause__ if isinstance(e, ProviderError) else e
-            check = cause if isinstance(cause, Exception) else e
-            if not _is_retryable(check):
+        except ProviderError as e:
+            if not _is_retryable(e):
                 raise
             last_exc = e
             if attempt < len(_RETRY_DELAYS):

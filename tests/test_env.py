@@ -50,7 +50,7 @@ def mock_infisical():
 
         client_instance = MagicMock()
         client_instance.ensure_token.return_value = "fake-token"
-        mock_client_cls.return_value = client_instance
+        mock_client_cls.for_config.return_value = client_instance
 
         yield settings, client_instance
 
@@ -125,3 +125,28 @@ class TestEnvEdgeCases:
 
         assert result.exit_code == 1
         assert "Unknown project" in result.output
+
+
+class TestEnvThroughTheSdk:
+    """The command qvm's CI runner runs, against a stand-in Infisical, nothing mocked between."""
+
+    def test_a_folder_becomes_exports(self, infisical, tmp_path) -> None:
+        settings = _fake_settings()
+        settings.state_dir = tmp_path
+        settings.providers["infisical"]["auth"]["client_id"] = infisical.client_id
+        settings.providers["infisical"]["auth"]["client_secret"] = infisical.client_secret
+        infisical.folders[("proj-uuid", "prod", "/pipelines/qvm")] = {"QVM_API_KEY": "k'1"}
+        with patch("psi.providers.infisical.cli.load_settings", return_value=settings):
+            result = runner.invoke(
+                app, ["infisical", "env", "--project", "myproject", "--path", "/pipelines/qvm"]
+            )
+        assert result.exit_code == 0, result.output
+        assert result.output == "export QVM_API_KEY='k'\\''1'\n"
+
+    def test_a_refused_login_fails_with_the_reason(self, infisical, tmp_path) -> None:
+        settings = _fake_settings()
+        settings.state_dir = tmp_path
+        with patch("psi.providers.infisical.cli.load_settings", return_value=settings):
+            result = runner.invoke(app, ["infisical", "env", "--project", "myproject"])
+        assert result.exit_code != 0
+        assert "HTTP 401" in str(result.exception)

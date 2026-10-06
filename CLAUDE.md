@@ -91,7 +91,7 @@ psi/
 │   │
 │   ├── infisical/
 │   │   ├── __init__.py                  InfisicalProvider class
-│   │   ├── api.py                       InfisicalClient (sync httpx)
+│   │   ├── api.py                       InfisicalClient (Infisical's SDK)
 │   │   ├── auth.py                      Auth methods (universal, aws-iam, gcp, azure)
 │   │   ├── token.py                     File-based token cache with per-auth keying
 │   │   ├── models.py                    AuthConfig, ProjectConfig, InfisicalConfig, TLS/Import models
@@ -237,7 +237,11 @@ uv run pytest              # tests
 ### Key conventions
 
 - All code must pass `ruff check`, `ruff format --check`, and `ty check` with zero errors
-- Sync httpx everywhere (no async)
+- Infisical through its SDK (`infisicalsdk`), never a hand-written client: what the SDK
+  lacks goes through its request layer (`InfisicalSDKClient.api`), so every call shares
+  one session, with a timeout and PSI's CA bundle (`api.py`)
+- Sync httpx for PSI's own HTTP: Podman's socket and the clouds' metadata services (no
+  async)
 - `from __future__ import annotations` in all modules
 - Runtime vs `TYPE_CHECKING` imports separated per ruff TCH rules
 - Provider-specific models live in their provider's `models.py`, generic models in `psi/models.py`
@@ -257,8 +261,9 @@ uv run pytest              # tests
 
 1. Add variant to `AuthMethod` enum in `providers/infisical/models.py`
 2. Add validation case in `AuthConfig.validate_auth_fields`
-3. Add implementation function in `providers/infisical/auth.py`
-4. Add case to `authenticate()` match statement
+3. Use the SDK's login if it has one; otherwise post to Infisical's login through the SDK's
+   request layer, as the GCP and Azure logins do, in `providers/infisical/auth.py`
+4. Add case to `login()` match statement
 
 ### Container builds
 
@@ -290,11 +295,17 @@ command validates the full chain.
 
 ## Infisical API endpoints used
 
-- Auth: `POST /api/v1/auth/{universal-auth,aws-auth,gcp-auth,azure-auth}/login`
-- List secrets: `GET /api/v4/secrets` (recursive)
-- Get secret: `GET /api/v4/secrets/{secretName}`
-- Create/batch/update: `POST/PATCH /api/v4/secrets/...`
-- Folders: `POST /api/v1/folders`
+Through the SDK's own calls (`infisicalsdk` 1.0.17):
+
+- Auth: `POST /api/v1/auth/{universal-auth,aws-auth}/login`
+- List secrets: `GET /api/v3/secrets/raw` (recursive)
+- Get, create, update a secret: `GET/POST/PATCH /api/v3/secrets/raw/{secretName}`
+- Folders: `POST /api/v2/folders`
+
+Through the SDK's request layer, for what it has no call for:
+
+- Auth: `POST /api/v1/auth/{gcp-auth,azure-auth}/login`
+- Batch create: `POST /api/v4/secrets/batch`
 - Certificates: `POST /api/v1/cert-manager/certificates`, `.../renew`
 
 ## Podman shell driver interface

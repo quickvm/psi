@@ -51,12 +51,22 @@ workloads:
 | Method | Config Fields | Use Case |
 |---|---|---|
 | `universal-auth` | `client_id`, `client_secret` | Machine identities with static credentials |
-| `aws-iam` | `identity_id` | EC2/ECS/Lambda with IAM roles |
+| `aws-iam` | `identity_id` | EC2/ECS/Lambda with IAM roles; the identity's STS endpoint must be its region's (below) |
 | `gcp` | `identity_id` | GCE/GKE with service accounts |
 | `azure` | `identity_id` | Azure VMs with managed identity |
 
 Auth can be set globally (covers all projects) or per-project
 (project-level overrides global).
+
+PSI logs in through Infisical's SDK. For `aws-iam` the SDK signs `GetCallerIdentity` for
+the region's STS endpoint (`https://sts.<region>.amazonaws.com/`, the region from
+`AWS_REGION` or the instance metadata), so set the identity's STS endpoint in Infisical to
+that region's. `gcp` and `azure` fetch the instance's identity token from the cloud's
+metadata service and send it to Infisical's login.
+
+Infisical's certificate is verified with `ca_cert` when set, else with the bundle the
+container units mount (`SSL_CERT_FILE`, from PSI's top-level `ca_cert`), else with requests'
+own bundle; `verify_ssl: false` turns verification off.
 
 ```yaml
 providers:
@@ -88,7 +98,8 @@ When `psi serve` starts, the Infisical provider initializes:
 
 1. **Config validation** — verifies every project has auth coverage
    (own or global fallback)
-2. **HTTP client** — creates an httpx client for API calls
+2. **HTTP client** — creates an Infisical SDK client, whose session gives every request
+   a timeout
 3. The provider is ready. Auth tokens are obtained lazily on first
    lookup and cached for the configured TTL.
 
@@ -163,7 +174,7 @@ What happens inside `_handle_lookup` in `psi/serve.py`:
    is where provider-outage resilience comes from.
 4. Otherwise dispatch to `InfisicalProvider.lookup()`, which resolves
    project/auth/token and calls
-   `GET /api/v4/secrets/{key}?projectId=...&environment=...&secretPath=...`
+   `GET /api/v3/secrets/raw/{key}?workspaceId=...&environment=...&secretPath=...`
 5. On a cache miss that succeeded, insert the value into the in-memory
    cache and re-encrypt `cache.enc` so future lookups do not have to
    touch Infisical again.

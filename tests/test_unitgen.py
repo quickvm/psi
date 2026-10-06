@@ -74,7 +74,7 @@ class TestNativeServiceGenerators:
 
     def test_tls_renew_service(self) -> None:
         content = generate_native_tls_renew_service("/usr/bin/psi")
-        assert "ExecStart=/usr/bin/psi tls renew" in content
+        assert "ExecStart=/usr/bin/psi infisical tls renew" in content
         assert "Type=oneshot" in content
 
     def test_custom_psi_path(self) -> None:
@@ -135,7 +135,7 @@ class TestContainerQuadletGenerators:
     def test_tls_renew_quadlet_no_tls(self, tmp_path: Path) -> None:
         settings = _mock_settings(tmp_path, tls=None)
         content = generate_container_tls_renew_quadlet("img:v1", settings)
-        assert "Exec=tls renew" in content
+        assert "Exec=infisical tls renew" in content
 
     def test_tls_renew_quadlet_with_cert_dirs(self, tmp_path: Path) -> None:
         tls = TlsConfig(
@@ -515,3 +515,21 @@ class TestProviderRefreshTimer:
         content = generate_provider_refresh_timer("infisical", "1h", "5m")
         assert "Description=" in content
         assert "cache refresh" in content.lower()
+
+
+class TestRenewalCommandExists:
+    def test_both_renewal_units_run_a_command_psi_has(self, tmp_path: Path) -> None:
+        from typer.testing import CliRunner
+
+        from psi.cli import app
+
+        native = generate_native_tls_renew_service("/usr/bin/psi")
+        quadlet = generate_container_tls_renew_quadlet("img:v1", _mock_settings(tmp_path, tls=None))
+        commands = [
+            next(line for line in native.splitlines() if line.startswith("ExecStart=")).split()[1:],
+            next(line for line in quadlet.splitlines() if line.startswith("Exec=")).split()[0:],
+        ]
+        commands[1][0] = commands[1][0].removeprefix("Exec=")
+        for command in commands:
+            result = CliRunner().invoke(app, [*command, "--help"])
+            assert result.exit_code == 0, f"psi {' '.join(command)}: {result.output}"

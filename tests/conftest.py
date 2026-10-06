@@ -17,9 +17,20 @@ from psi.providers.infisical.models import (
     TlsConfig,
     TokenSettings,
 )
+from tests.fake_infisical import FakeInfisical
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.fixture
+def infisical(monkeypatch: pytest.MonkeyPatch) -> FakeInfisical:
+    """A stand-in Infisical, answering every request the client's SDK sends."""
+    from psi.providers.infisical import api
+
+    fake = FakeInfisical()
+    monkeypatch.setattr(api, "_deliver", fake.deliver)
+    return fake
 
 
 @pytest.fixture
