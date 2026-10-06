@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from loguru import logger
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from psi.cache import Cache
+    from psi.models import SecretSource
     from psi.settings import PsiSettings
 
 _PODMAN_API_VERSION = "v5.0.0"
@@ -255,17 +256,17 @@ def _fetch_and_register_infisical(
                 recursive=source.recursive,
             )
 
-            for secret in secrets:
+            for name, secret in _selected(workload_name, source, secrets):
                 key = secret["secretKey"]
                 actual_path = secret.get("secretPath", source.path)
-                merged[key] = InfisicalProvider.make_mapping(
+                merged[name] = InfisicalProvider.make_mapping(
                     source.project,
                     actual_path,
                     key,
                 )
                 raw_value = secret.get("secretValue")
                 if raw_value is not None:
-                    values[key] = str(raw_value).encode("utf-8")
+                    values[name] = str(raw_value).encode("utf-8")
 
             logger.info("Found {} secrets", len(secrets))
 
@@ -292,6 +293,27 @@ def _fetch_and_register_infisical(
             values_by_mapping[mapping_bytes] = value
     finally:
         provider.close()
+
+
+def _selected(
+    workload_name: str, source: SecretSource, secrets: list[dict[str, Any]]
+) -> list[tuple[str, dict[str, Any]]]:
+    """The secrets a source gives its workload, each with the environment variable it fills.
+
+    Raises:
+        ProviderError: The source maps a key its folder does not hold.
+    """
+    if source.env is None:
+        return [(secret["secretKey"], secret) for secret in secrets]
+    by_key = {secret["secretKey"]: secret for secret in secrets}
+    missing = sorted({key for key in source.env.values() if key not in by_key})
+    if missing:
+        msg = (
+            f"workload {workload_name}: {source.path} in project {source.project} has no "
+            f"{', '.join(missing)}; add them there or drop them from the source's env"
+        )
+        raise ProviderError(msg, provider_name="infisical")
+    return [(name, by_key[key]) for name, key in source.env.items()]
 
 
 def _register_secrets(

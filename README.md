@@ -289,6 +289,25 @@ To pull an entire folder tree into a single workload:
         recursive: true          # includes /myapp, /myapp/db, /myapp/cache, etc.
 ```
 
+### Picking keys
+
+A source with `env` gives its workload only the keys it maps, each as the environment
+variable it names, instead of every key in the folder under its own name. One folder can then
+serve several containers, each getting just what it uses, under the names it expects; setup
+fails when the folder lacks a mapped key. `env` reads one folder, so it cannot be combined
+with `recursive`.
+
+```yaml
+workloads:
+  tailscale:
+    provider: infisical
+    secrets:
+      - project: myproject
+        path: /web
+        env:
+          TS_AUTHKEY: TAILSCALE_AUTHKEY   # the variable, from this key
+```
+
 ### Template units
 
 Workload names ending with `@` are systemd template units. PSI registers secrets and generates a
