@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import requests
-from infisical_sdk import InfisicalError, InfisicalSDKClient
+from infisical_sdk import BaseSecret, InfisicalError, InfisicalSDKClient
 from infisical_sdk.infisical_requests import APIError
 from requests.adapters import HTTPAdapter
 
@@ -23,8 +23,10 @@ from psi.providers.infisical.auth import login
 from psi.providers.infisical.token import read_cached_token, write_token_cache
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterator, Mapping, Sequence
     from pathlib import Path
+
+    from infisical_sdk.api_types import Import
 
     from psi.providers.infisical.models import AuthConfig, InfisicalConfig
 
@@ -65,6 +67,30 @@ class _Timeout(HTTPAdapter):
 def _deliver(adapter: HTTPAdapter, request: requests.PreparedRequest, **kwargs: Any) -> Any:
     """Send ``request`` over the network; the tests stand an Infisical in here."""
     return HTTPAdapter.send(adapter, request, **kwargs)
+
+
+def _imported(imports: Sequence[Import], own: set[str], folder: str) -> list[dict[str, Any]]:
+    """The secrets ``imports`` give ``folder`` besides its ``own`` keys, under its path.
+
+    The last import wins, as Infisical's own CLI merges them.
+    """
+    added: dict[str, dict[str, Any]] = {}
+    for imported in reversed(imports):
+        for secret in imported.secrets:
+            entry = _as_dict(secret)
+            key = entry["secretKey"]
+            if key not in own and key not in added:
+                added[key] = entry | {"secretPath": folder}
+    return list(added.values())
+
+
+def _as_dict(secret: BaseSecret | Mapping[str, Any]) -> dict[str, Any]:
+    """A listed secret as a dict.
+
+    The SDK parses a folder's own secrets into ``BaseSecret`` but leaves an import's as the
+    dicts the API sent (1.0.17's ``Import`` does not convert them), so both shapes are read.
+    """
+    return secret.to_dict() if isinstance(secret, BaseSecret) else dict(secret)
 
 
 def _trust(verify_ssl: bool, ca_cert: Path | None) -> bool | str:
@@ -158,15 +184,26 @@ class InfisicalClient:
         secret_path: str,
         *,
         recursive: bool = False,
+        imports: bool = False,
     ) -> list[dict[str, Any]]:
         """List secrets at a path.
 
         Args:
             recursive: If True, include secrets from subfolders.
+            imports: If True, also the secrets the folder imports, as Infisical resolves them:
+                the folder's own win, and among its imports the last. Each takes the folder's
+                path, so a lookup there finds it through the import, as the listing did.
 
         Returns:
             List of secret objects with secretKey, secretValue, secretPath, etc.
+
+        Raises:
+            ValueError: Both ``recursive`` and ``imports``: a recursive listing's imports do
+                not say which folder imports each.
         """
+        if recursive and imports:
+            msg = "a recursive listing cannot take imports: they do not say which folder imports"
+            raise ValueError(msg)
         with self._calling(f"list {secret_path}", token):
             listing = self._sdk.secrets.list_secrets(
                 environment_slug=environment,
@@ -177,7 +214,10 @@ class InfisicalClient:
                 recursive=recursive,
                 include_imports=True,
             )
-        return [secret.to_dict() for secret in listing.secrets]
+        own = [secret.to_dict() for secret in listing.secrets]
+        if not imports:
+            return own
+        return own + _imported(listing.imports, {s["secretKey"] for s in own}, secret_path)
 
     def get_secret(
         self,

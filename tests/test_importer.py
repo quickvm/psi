@@ -16,6 +16,8 @@ from psi.providers.infisical.models import ConflictPolicy, ImportOutcome
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from tests.fake_infisical import FakeInfisical
+
 
 def _mock_podman_api_get(responses: dict[str, Any]) -> Any:
     """Create a mock for _podman_api_get that returns different responses per path."""
@@ -327,3 +329,26 @@ class TestRunImport:
         )
         assert result.created == 1
         assert result.skipped == 1
+
+
+def test_a_key_the_folder_only_imports_is_created_there(
+    infisical: FakeInfisical, tmp_path: Path
+) -> None:
+    """The folder's own keys decide what conflicts: one it reaches through an import is new."""
+    from psi.providers.infisical.api import InfisicalClient
+    from psi.providers.infisical.models import ImportSecret
+
+    folder, shared = ("proj", "prod", "/app"), ("proj", "prod", "/shared")
+    infisical.folders[folder] = {}
+    infisical.folders[shared] = {"SHARED": "from the import"}
+    infisical.imports[folder] = [shared]
+    with InfisicalClient("https://infisical.test", tmp_path, token_ttl=300) as client:
+        result = run_import(
+            client,
+            "access-token-1",
+            *folder,
+            [ImportSecret(key="SHARED", value="its own")],
+            conflict=ConflictPolicy.FAIL,
+        )
+    assert result.created == 1
+    assert infisical.folders[folder] == {"SHARED": "its own"}

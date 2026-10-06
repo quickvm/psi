@@ -113,7 +113,7 @@ def env_cmd(
     client = InfisicalClient.for_config(inf_config, settings.state_dir)
     try:
         token = client.ensure_token(auth)
-        secrets = client.list_secrets(token, proj.id, env, secret_path)
+        secrets = client.list_secrets(token, proj.id, env, secret_path, imports=True)
     finally:
         client.close()
 

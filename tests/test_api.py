@@ -114,6 +114,43 @@ class TestListSecrets:
         }
         assert infisical.sent[0].params["recursive"] == "true"
 
+    def test_imports_add_what_the_folder_lacks_under_its_path_the_last_winning(
+        self, tmp_path: Path, infisical: FakeInfisical
+    ) -> None:
+        shared, other_environment = ("proj", "prod", "/shared"), ("proj", "dev", "/more")
+        infisical.folders[APP] = {"A": "own"}
+        infisical.folders[shared] = {"A": "shared", "B": "shared"}
+        infisical.folders[other_environment] = {"B": "more", "C": "more"}
+        infisical.imports[APP] = [shared, other_environment]
+        with _client(tmp_path) as client:
+            secrets = client.list_secrets("access-token-1", *APP, imports=True)
+        assert sorted((s["secretKey"], s["secretValue"], s["secretPath"]) for s in secrets) == [
+            ("A", "own", "/app"),
+            ("B", "more", "/app"),
+            ("C", "more", "/app"),
+        ]
+
+    def test_without_imports_a_listing_holds_the_folders_own_secrets(
+        self, tmp_path: Path, infisical: FakeInfisical
+    ) -> None:
+        shared = ("proj", "prod", "/shared")
+        infisical.folders[APP] = {"A": "own"}
+        infisical.folders[shared] = {"B": "shared"}
+        infisical.imports[APP] = [shared]
+        with _client(tmp_path) as client:
+            secrets = client.list_secrets("access-token-1", *APP)
+        assert [s["secretKey"] for s in secrets] == ["A"]
+
+    def test_a_recursive_listing_cannot_take_imports(
+        self, tmp_path: Path, infisical: FakeInfisical
+    ) -> None:
+        with (
+            _client(tmp_path) as client,
+            pytest.raises(ValueError, match="recursive listing cannot take imports"),
+        ):
+            client.list_secrets("access-token-1", *APP, recursive=True, imports=True)
+        assert not infisical.sent
+
     def test_raises_on_error(self, tmp_path: Path, infisical: FakeInfisical) -> None:
         with _client(tmp_path) as client, pytest.raises(InfisicalAPIError) as caught:
             client.list_secrets("access-token-1", *APP)

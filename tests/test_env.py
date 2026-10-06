@@ -143,6 +143,22 @@ class TestEnvThroughTheSdk:
         assert result.exit_code == 0, result.output
         assert result.output == "export QVM_API_KEY='k'\\''1'\n"
 
+    def test_a_folder_exports_what_it_imports_under_its_own(self, infisical, tmp_path) -> None:
+        settings = _fake_settings()
+        settings.state_dir = tmp_path
+        settings.providers["infisical"]["auth"]["client_id"] = infisical.client_id
+        settings.providers["infisical"]["auth"]["client_secret"] = infisical.client_secret
+        folder, shared = ("proj-uuid", "prod", "/pipelines/qvm"), ("proj-uuid", "prod", "/shared")
+        infisical.folders[folder] = {"A": "own"}
+        infisical.folders[shared] = {"A": "imported", "B": "b"}
+        infisical.imports[folder] = [shared]
+        with patch("psi.providers.infisical.cli.load_settings", return_value=settings):
+            result = runner.invoke(
+                app, ["infisical", "env", "--project", "myproject", "--path", "/pipelines/qvm"]
+            )
+        assert result.exit_code == 0, result.output
+        assert result.output == "export A='own'\nexport B='b'\n"
+
     def test_a_refused_login_fails_with_the_reason(self, infisical, tmp_path) -> None:
         settings = _fake_settings()
         settings.state_dir = tmp_path
