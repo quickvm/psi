@@ -13,7 +13,7 @@ from psi.errors import ProviderError
 from psi.models import SecretSource, SystemdScope, WorkloadConfig
 from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
-from psi.setup import _fetch_and_register_infisical
+from psi.setup import _fetch_and_register_infisical, _Fetches
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -48,11 +48,15 @@ def _fetch(tmp_path: Path, source: SecretSource) -> tuple[dict[str, str], dict[b
     registered: dict[str, str] = {}
     values: dict[bytes, bytes] = {}
     settings = _settings(tmp_path, source)
+    fetches = _Fetches(settings)
     with (
         patch("psi.setup._register_secrets", lambda s, w, merged: registered.update(merged)),
         patch("psi.setup._check_workload_drift", return_value=[]),
     ):
-        _fetch_and_register_infisical(settings, "tailscale", values, [])
+        try:
+            _fetch_and_register_infisical(settings, "tailscale", values, [], fetches)
+        finally:
+            fetches.close()
     return registered, values
 
 

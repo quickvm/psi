@@ -68,6 +68,20 @@ Infisical's certificate is verified with `ca_cert` when set, else with the bundl
 container units mount (`SSL_CERT_FILE`, from PSI's top-level `ca_cert`), else with requests'
 own bundle; `verify_ssl: false` turns verification off.
 
+### What setup asks of Infisical
+
+A setup run, at boot or on each cache refresh, opens one session for all its workloads and
+lists each folder once: workloads that read the same folder, and a workload retried after
+another of its folders failed, reuse the listing. On a small self-hosted instance that a
+refresh still keeps busy, `fetch_delay_ms` adds a pause between the listings setup sends
+(none for a folder it has listed already):
+
+```yaml
+providers:
+  infisical:
+    fetch_delay_ms: 250  # default 0
+```
+
 ```yaml
 providers:
   infisical:
