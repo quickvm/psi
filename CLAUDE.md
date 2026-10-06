@@ -310,6 +310,8 @@ Driver commands must not produce Rich output — pure stdin/stdout/stderr protoc
 
 ## Planned work
 
+`docs/plan-sdk-and-cloud-stores.md`: Infisical through its SDK, then each cloud's secret store.
+
 See `notes/` directory:
 
 - `error-handling-cleanup.md` — eliminate stack traces, catch all errors with user-friendly messages
