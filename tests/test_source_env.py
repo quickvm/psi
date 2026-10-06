@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from psi.errors import ProviderError
 from psi.models import SecretSource, SystemdScope, WorkloadConfig
+from psi.providers.infisical import InfisicalProvider
 from psi.settings import PsiSettings
 from psi.setup import _fetch_and_register_infisical
 
@@ -73,6 +74,25 @@ class TestEnvMapping:
         dropin = tmp_path / "systemd" / "tailscale.container.d" / "50-secrets.conf"
         assert "Secret=tailscale--TS_AUTHKEY,type=env,target=TS_AUTHKEY" in dropin.read_text()
         assert "OTHER" not in dropin.read_text()
+
+    def test_a_key_the_folder_imports_reaches_the_workload_and_its_lookups(
+        self, tmp_path: Path, infisical: FakeInfisical
+    ) -> None:
+        shared = ("proj-uuid", "prod", "/shared")
+        infisical.folders[FOLDER] = {}
+        infisical.folders[shared] = {"TAILSCALE_AUTHKEY": "tskey-imported"}
+        infisical.imports[FOLDER] = [shared]
+        source = SecretSource(project="web", path="/web", env={"TS_AUTHKEY": "TAILSCALE_AUTHKEY"})
+        registered, values = _fetch(tmp_path, source)
+        mapping = json.loads(registered["TS_AUTHKEY"])
+        assert mapping["path"] == "/web"
+        assert list(values.values()) == [b"tskey-imported"]
+        provider = InfisicalProvider(_settings(tmp_path, source))
+        provider.open()
+        try:
+            assert provider.lookup(mapping) == b"tskey-imported"
+        finally:
+            provider.close()
 
     def test_one_key_may_fill_two_variables(self, tmp_path: Path, infisical: FakeInfisical) -> None:
         infisical.folders[FOLDER] = {"TOKEN": "t"}

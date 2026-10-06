@@ -289,6 +289,15 @@ To pull an entire folder tree into a single workload:
         recursive: true          # includes /myapp, /myapp/db, /myapp/cache, etc.
 ```
 
+### Imported secrets
+
+A source also gets the secrets its folder imports (Infisical's secret imports, from another
+folder or environment), as Infisical resolves them: the folder's own secrets win over
+imported ones, and among imports the last wins. PSI keeps each under the folder's path and
+reads it back through the folder, so a container gets what the folder shows when it starts. A recursive source
+reads each folder's own secrets only: a recursive listing does not say which folder imports
+what. `psi infisical env` exports a folder's imports the same way.
+
 ### Picking keys
 
 A source with `env` gives its workload only the keys it maps, each as the environment

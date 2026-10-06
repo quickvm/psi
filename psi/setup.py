@@ -254,6 +254,7 @@ def _fetch_and_register_infisical(
                 project.environment,
                 source.path,
                 recursive=source.recursive,
+                imports=not source.recursive,
             )
 
             for name, secret in _selected(workload_name, source, secrets):

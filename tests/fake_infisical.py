@@ -53,6 +53,8 @@ class FakeInfisical:
     token: str = "access-token-1"
     expires_in: int = 7200
     folders: dict[Folder, dict[str, str]] = field(default_factory=dict)
+    imports: dict[Folder, list[Folder]] = field(default_factory=dict)
+    """The folders each folder imports, in order; an import may be of another environment."""
     answers: dict[tuple[str, str], Callable[[requests.PreparedRequest], requests.Response]] = field(
         default_factory=dict
     )
@@ -126,9 +128,20 @@ class FakeInfisical:
             if name not in self.folders.get(folder, {}):
                 return reply(request, 404, {"message": f"Secret {name} not found"})
             self.folders[folder][name] = source["secretValue"]
-        elif name not in self.folders.get(folder, {}):
-            return reply(request, 404, {"message": f"Secret {name} not found"})
+        else:
+            include_imports = sent.params.get("include_imports") == "true"
+            value = self._resolved(folder, include_imports=include_imports).get(name)
+            if value is None:
+                return reply(request, 404, {"message": f"Secret {name} not found"})
+            return reply(request, 200, {"secret": secret(name, value, path)})
         return reply(request, 200, {"secret": secret(name, self.folders[folder][name], path)})
+
+    def _resolved(self, folder: Folder, *, include_imports: bool) -> dict[str, str]:
+        """A folder's secrets as Infisical reads one by name: its own over its imports'."""
+        found: dict[str, str] = {}
+        for imported in self.imports.get(folder, []) if include_imports else []:
+            found |= self.folders.get(imported, {})
+        return found | self.folders.get(folder, {})
 
     def _listing(
         self,
@@ -142,14 +155,31 @@ class FakeInfisical:
         if (project, environment, path) not in self.folders:
             return reply(request, 404, {"message": "Folder not found"})
         below = path.rstrip("/") + "/"
-        listed = [
-            secret(key, value, where)
-            for (p, e, where), values in self.folders.items()
-            if (p, e) == (project, environment)
-            and (where == path or (recursive and where.startswith(below)))
-            for key, value in values.items()
+        folders = [
+            folder
+            for folder in self.folders
+            if folder[:2] == (project, environment)
+            and (folder[2] == path or (recursive and folder[2].startswith(below)))
         ]
-        return reply(request, 200, {"secrets": listed, "imports": []})
+        listed = [
+            secret(key, value, f[2]) for f in folders for key, value in self.folders[f].items()
+        ]
+        imports = [
+            {
+                "secretPath": imported[2],
+                "environment": imported[1],
+                "folderId": f"folder-{imported[1]}-{imported[2]}",
+                # PSI gives an imported secret the importing folder's path, whatever the
+                # listing says, so these carry none.
+                "secrets": [
+                    {k: v for k, v in secret(key, value, imported[2]).items() if k != "secretPath"}
+                    for key, value in self.folders.get(imported, {}).items()
+                ],
+            }
+            for f in folders
+            for imported in self.imports.get(f, [])
+        ]
+        return reply(request, 200, {"secrets": listed, "imports": imports})
 
     def _folder(self, request: requests.PreparedRequest, body: dict[str, Any]) -> requests.Response:
         parent = body["path"].rstrip("/")
