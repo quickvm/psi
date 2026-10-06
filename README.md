@@ -138,6 +138,7 @@ providers:
     ca_cert: /etc/pki/tls/certs/ca-bundle.crt  # optional, for private CA
     token:
       ttl: 300  # auth token cache TTL in seconds
+    fetch_delay_ms: 0  # optional pause between the folders setup lists
     auth:
       method: universal-auth
       client_id: "..."
@@ -200,7 +201,9 @@ unwrapping the AES key via PKCS#11 at `psi serve` startup.
 With the cache enabled, `psi systemd install` also generates a periodic refresh timer
 (`psi-infisical-refresh.timer`) plus a small wrapper service that restarts the setup
 unit on `refresh_interval`, so a secret rotated upstream makes its way into PSI without
-manual intervention.
+manual intervention. Each run lists a folder once however many workloads read it; see
+[what setup asks of Infisical](docs/infisical-provider.md#what-setup-asks-of-infisical) for
+pacing a small self-hosted instance.
 
 ```bash
 # One-time provisioning (host)

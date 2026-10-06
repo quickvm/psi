@@ -6,7 +6,7 @@ import hashlib
 from enum import StrEnum
 from pathlib import Path  # noqa: TCH003 — Pydantic needs Path at runtime
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from psi.errors import ConfigError
 
@@ -112,6 +112,9 @@ class InfisicalConfig(BaseModel):
     token: TokenSettings = TokenSettings()
     projects: dict[str, ProjectConfig] = {}
     tls: TlsConfig | None = None
+    fetch_delay_ms: int = Field(default=0, ge=0)
+    """A pause setup takes between two listings it asks Infisical for, to pace a small
+    self-hosted instance through a refresh. A folder setup has listed already costs none."""
 
     @model_validator(mode="after")
     def validate_auth_coverage(self) -> InfisicalConfig:

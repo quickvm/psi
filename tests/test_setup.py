@@ -17,6 +17,7 @@ from psi.setup import (
     _RETRY_DELAYS,
     _check_orphans,
     _check_workload_drift,
+    _Fetches,
     _generate_drop_in,
     _is_retryable,
     _register_secrets,
@@ -222,7 +223,7 @@ class TestSetupRetry:
     def test_retries_while_unreachable_then_succeeds(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, fetches):
             nonlocal call_count
             call_count += 1
             if call_count < 3:
@@ -232,14 +233,15 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             patch("psi.setup.time.sleep"),
         ):
-            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
+            settings = _myapp(tmp_path)
+            _setup_infisical_workload(settings, "myapp", {}, [], _Fetches(settings))
 
         assert call_count == 3
 
     def test_raises_after_all_retries_exhausted(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, fetches):
             nonlocal call_count
             call_count += 1
             raise _refused(502)
@@ -249,14 +251,15 @@ class TestSetupRetry:
             patch("psi.setup.time.sleep"),
             pytest.raises(InfisicalAPIError, match="HTTP 502"),
         ):
-            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
+            settings = _myapp(tmp_path)
+            _setup_infisical_workload(settings, "myapp", {}, [], _Fetches(settings))
 
         assert call_count == len(_RETRY_DELAYS) + 1
 
     def test_a_refused_login_raises_immediately(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def mock_fetch(settings, workload_name, cache_updates, drift):
+        def mock_fetch(settings, workload_name, cache_updates, drift, fetches):
             nonlocal call_count
             call_count += 1
             raise _refused(401)
@@ -265,7 +268,8 @@ class TestSetupRetry:
             patch("psi.setup._fetch_and_register_infisical", side_effect=mock_fetch),
             pytest.raises(InfisicalAPIError, match="HTTP 401"),
         ):
-            _setup_infisical_workload(_myapp(tmp_path), "myapp", {}, [])
+            settings = _myapp(tmp_path)
+            _setup_infisical_workload(settings, "myapp", {}, [], _Fetches(settings))
 
         assert call_count == 1
 
@@ -370,7 +374,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             drift.append(f"{workload_name}--STALE_KEY")
 
         with (
@@ -391,7 +395,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             pass
 
         with (
@@ -417,7 +421,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             drift.append(f"{workload_name}--STALE")
 
         with (
@@ -441,7 +445,7 @@ class TestRunSetupDriftExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             drift.append("myapp--STALE")
 
         with (
@@ -505,7 +509,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             pass
 
         with (
@@ -529,7 +533,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             drift.append("myapp--STALE")
 
         with (
@@ -551,7 +555,7 @@ class TestRunSetupOrphanExit:
             },
         )
 
-        def mock_fetch(settings, workload_name, values_by_mapping, drift):
+        def mock_fetch(settings, workload_name, values_by_mapping, drift, fetches):
             pass
 
         with (

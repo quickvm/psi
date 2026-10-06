@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 
     from psi.cache import Cache
     from psi.models import SecretSource
+    from psi.providers.infisical import InfisicalProvider
+    from psi.providers.infisical.api import InfisicalClient
+    from psi.providers.infisical.models import InfisicalConfig, ProjectConfig
     from psi.settings import PsiSettings
 
 _PODMAN_API_VERSION = "v5.0.0"
@@ -60,6 +63,7 @@ def run_setup(
     # HMAC cache key once the cache object is available.
     values_by_mapping: dict[bytes, bytes] = {}
     drift: list[str] = []
+    fetches: _Fetches | None = None
 
     try:
         for workload_name, workload in settings.workloads.items():
@@ -69,7 +73,10 @@ def run_setup(
             logger.info("Workload: {}", workload_name)
 
             if workload.provider == "infisical":
-                _setup_infisical_workload(settings, workload_name, values_by_mapping, drift)
+                fetches = fetches or _Fetches(settings)
+                _setup_infisical_workload(
+                    settings, workload_name, values_by_mapping, drift, fetches
+                )
             elif workload.provider == "nitrokeyhsm":
                 logger.info("Nitrokey HSM workload — secrets created via 'psi nitrokeyhsm store'")
             else:
@@ -81,6 +88,8 @@ def run_setup(
                 cache.set(cache.cache_key(mapping_bytes), value)
             cache.save()
     finally:
+        if fetches is not None:
+            fetches.close()
         if cache is not None:
             cache.close()
 
@@ -174,17 +183,85 @@ def _is_retryable(exc: Exception) -> bool:
     return exc.status_code is None or exc.status_code in (404, 502, 503)
 
 
+class _Fetches:
+    """What one setup run's Infisical workloads share, so a refresh asks little of Infisical.
+
+    One provider, opened at the first listing: one session and one token cache for the run.
+    Each folder is listed once, so workloads that read the same folder, and a workload's
+    retry after another of its folders failed, reuse the listing. A config may also ask for a
+    pause between listings (``fetch_delay_ms``), to pace a small self-hosted Infisical.
+    """
+
+    def __init__(self, settings: PsiSettings) -> None:
+        from psi.providers.infisical.models import InfisicalConfig
+
+        self.settings = settings
+        self.config: InfisicalConfig = InfisicalConfig.model_validate(
+            settings.providers.get("infisical", {})
+        )
+        self._provider: InfisicalProvider | None = None
+        self._listings: dict[tuple[str, str, str, str, bool], list[dict[str, Any]]] = {}
+        self._asked = False
+
+    def listing(self, project: ProjectConfig, source: SecretSource) -> list[dict[str, Any]]:
+        """``source``'s folder as Infisical lists it, asking Infisical only the first time.
+
+        A listing is reused only for the identity that made it, which may see more of the
+        folder than another identity for the same project.
+
+        Raises:
+            InfisicalAPIError: Infisical refused the login or the listing, or did not answer.
+        """
+        from psi.providers.infisical.models import resolve_auth
+
+        auth = resolve_auth(project, self.config)
+        key = (auth.cache_key(), project.id, project.environment, source.path, source.recursive)
+        if key in self._listings:
+            return self._listings[key]
+        client = self._client()
+        token = client.ensure_token(auth)
+        if self._asked and self.config.fetch_delay_ms:
+            time.sleep(self.config.fetch_delay_ms / 1000)
+        self._asked = True
+        self._listings[key] = client.list_secrets(
+            token,
+            project.id,
+            project.environment,
+            source.path,
+            recursive=source.recursive,
+            imports=not source.recursive,
+        )
+        return self._listings[key]
+
+    def close(self) -> None:
+        """Close the provider's session, if a listing opened it."""
+        if self._provider is not None:
+            self._provider.close()
+
+    def _client(self) -> InfisicalClient:
+        from psi.providers.infisical import InfisicalProvider
+
+        if self._provider is None:
+            self._provider = InfisicalProvider(self.settings)
+            self._provider.open()
+        assert self._provider._client is not None
+        return self._provider._client
+
+
 def _setup_infisical_workload(
     settings: PsiSettings,
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
     drift: list[str],
+    fetches: _Fetches,
 ) -> None:
     """Run Infisical-specific setup for a workload with retry."""
     last_exc: Exception | None = None
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
-            _fetch_and_register_infisical(settings, workload_name, values_by_mapping, drift)
+            _fetch_and_register_infisical(
+                settings, workload_name, values_by_mapping, drift, fetches
+            )
             return
         except ProviderError as e:
             if not _is_retryable(e):
@@ -208,6 +285,7 @@ def _fetch_and_register_infisical(
     workload_name: str,
     values_by_mapping: dict[bytes, bytes],
     drift: list[str],
+    fetches: _Fetches,
 ) -> None:
     """Fetch secrets from Infisical and register with Podman.
 
@@ -226,74 +304,54 @@ def _fetch_and_register_infisical(
     """
     from psi.provider import mapping_cache_bytes, parse_mapping
     from psi.providers.infisical import InfisicalProvider
-    from psi.providers.infisical.models import InfisicalConfig, resolve_auth
 
-    infisical_config = InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
     workload = settings.workloads[workload_name]
-    provider = InfisicalProvider(settings)
-    provider.open()
+    merged: dict[str, str] = {}
+    values: dict[str, bytes] = {}
+    for source in workload.secrets:
+        project = fetches.config.projects[source.project]
+        logger.info(
+            "Fetching project={} path={}",
+            source.project,
+            source.path,
+        )
+        secrets = fetches.listing(project, source)
 
-    try:
-        merged: dict[str, str] = {}
-        values: dict[str, bytes] = {}
-        for source in workload.secrets:
-            project = infisical_config.projects[source.project]
-            auth = resolve_auth(project, infisical_config)
-            assert provider._client is not None
-            token = provider._client.ensure_token(auth)
-
-            logger.info(
-                "Fetching project={} path={}",
+        for name, secret in _selected(workload_name, source, secrets):
+            key = secret["secretKey"]
+            actual_path = secret.get("secretPath", source.path)
+            merged[name] = InfisicalProvider.make_mapping(
                 source.project,
-                source.path,
+                actual_path,
+                key,
             )
+            raw_value = secret.get("secretValue")
+            if raw_value is not None:
+                values[name] = str(raw_value).encode("utf-8")
 
-            secrets = provider._client.list_secrets(
-                token,
-                project.id,
-                project.environment,
-                source.path,
-                recursive=source.recursive,
-                imports=not source.recursive,
-            )
+        logger.info("Found {} secrets", len(secrets))
 
-            for name, secret in _selected(workload_name, source, secrets):
-                key = secret["secretKey"]
-                actual_path = secret.get("secretPath", source.path)
-                merged[name] = InfisicalProvider.make_mapping(
-                    source.project,
-                    actual_path,
-                    key,
-                )
-                raw_value = secret.get("secretValue")
-                if raw_value is not None:
-                    values[name] = str(raw_value).encode("utf-8")
+    logger.info("Merged: {} unique secrets", len(merged))
+    _register_secrets(settings, workload_name, merged)
 
-            logger.info("Found {} secrets", len(secrets))
+    orphans = _check_workload_drift(workload_name, merged)
+    for orphan in orphans:
+        logger.warning(
+            "Drift: Podman secret '{}' is not in this fetch — the "
+            "drop-in will not reference it. If the key lives in an "
+            "Infisical subfolder, add 'recursive: true' to the source "
+            "in config.yaml. Otherwise remove the stale secret: "
+            "podman secret rm {}",
+            orphan,
+            orphan,
+        )
+    drift.extend(orphans)
 
-        logger.info("Merged: {} unique secrets", len(merged))
-        _register_secrets(settings, workload_name, merged)
+    _generate_drop_in(settings, workload_name, merged)
 
-        orphans = _check_workload_drift(workload_name, merged)
-        for orphan in orphans:
-            logger.warning(
-                "Drift: Podman secret '{}' is not in this fetch — the "
-                "drop-in will not reference it. If the key lives in an "
-                "Infisical subfolder, add 'recursive: true' to the source "
-                "in config.yaml. Otherwise remove the stale secret: "
-                "podman secret rm {}",
-                orphan,
-                orphan,
-            )
-        drift.extend(orphans)
-
-        _generate_drop_in(settings, workload_name, merged)
-
-        for key, value in values.items():
-            mapping_bytes = mapping_cache_bytes(parse_mapping(merged[key]))
-            values_by_mapping[mapping_bytes] = value
-    finally:
-        provider.close()
+    for key, value in values.items():
+        mapping_bytes = mapping_cache_bytes(parse_mapping(merged[key]))
+        values_by_mapping[mapping_bytes] = value
 
 
 def _selected(
