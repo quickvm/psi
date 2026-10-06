@@ -556,9 +556,18 @@ wheels = [
 
 [[package]]
 name = "pykcs11"
-version = "1.5.18"
+version = "1.5.20"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/22/07/0c2215cb6ef70c213892571eb015e670f4d6adbecedc5eb2369f82c1c7f2/pykcs11-1.5.18.tar.gz", hash = "sha256:12fd878b369821d80c1be8a140c85e8a0fb1358fcaaba66ca66869213692f227", size = 105555, upload-time = "2025-08-03T15:50:55.622Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9a/7f/caf69dafa28ce1d255bf719c0d5e38edc448b08d9847c8b1143fa2d6e503/pykcs11-1.5.20.tar.gz", hash = "sha256:1f7a7c8164fac636382aa7b0d70279ad5581379748fc17a20bc0be8fe574c259", size = 115774, upload-time = "2026-09-04T17:10:03.509Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/eb/95969f33693f467f4373360f21f0d72dcbf0799298c16bdc948ea4f9744c/pykcs11-1.5.20-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:ed087cab34fc8c3647d23666eb35a3aa7acb8367d7b3ffa822821bddf5d36a0b", size = 371385, upload-time = "2026-09-04T17:01:23.773Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/9b/5aa8cb1037d30ce9aabc8b68a46e28a3336f0eee512efa67422ca958c2a8/pykcs11-1.5.20-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:36b4934e2e287e98019d72d8fff503dc4bca013882b9c27901ecccd3ba0a14fc", size = 1342475, upload-time = "2026-09-04T17:09:53.141Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/b1/6683c88db05aaf4b4e952f89c1e817750cb76e76e103eb2b15429f13812c/pykcs11-1.5.20-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:487026c9bfcd26591581e21e6b08f12567b0fbbcc175cc6a398034bcd101de00", size = 2302608, upload-time = "2026-09-04T17:09:55.142Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/40/965dc3527c02bf6cdb64bca586424fd58b1184a313fe8dd53b2279dd61cf/pykcs11-1.5.20-cp314-cp314-win32.whl", hash = "sha256:df18e0f2d45fe0089d316e2f0fda63573b7ab750ebf1edabbf7d410bc450ca4b", size = 180948, upload-time = "2026-09-04T17:03:19.625Z" },
+    { url = "https://files.pythonhosted.org/packages/70/1e/f70828f63351c1d9442df59dea20378baa3e0a8b84ed015db2940d1524c0/pykcs11-1.5.20-cp314-cp314-win_amd64.whl", hash = "sha256:a528c3140a9b76bd1ba6672372f9f6a61e387c9f547915e30b7bc798e7cacef2", size = 205645, upload-time = "2026-09-04T17:03:21.083Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/f9/a42e3e4afb880ff378fc7781d71f8381e65282a9a168f2028728cd10a8cd/pykcs11-1.5.20-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a06c48e66fc7244125a6efc5ce7cc9fbd120be35b059c979dcdc1133fc28d4fc", size = 1406013, upload-time = "2026-09-04T17:09:56.725Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/aa/c4d70b9d9e21533b02f2bf0a1caeb046ce659e1add5a71920d193105c630/pykcs11-1.5.20-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:a146ad515de84bed6e8d09628bcf61c09b39cde13660c249c52bcaa6c1f532c1", size = 2352972, upload-time = "2026-09-04T17:09:58.441Z" },
+]
 
 [[package]]
 name = "pytest"
