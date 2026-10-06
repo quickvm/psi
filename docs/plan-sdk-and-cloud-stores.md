@@ -36,56 +36,39 @@ a PSI provider of the same name.
   `ghcr.io/quickvm/psi`, pinned by digest in qvm's `.buildkite/runner.yaml`; the homelab and
   QuickVM's deploys run `psi setup` and serve.
 
-## Part 1: Infisical through the SDK
+## Part 1: Infisical through the SDK (done, #41)
 
-`infisicalsdk` 1.0.17 imports and builds a client on Python 3.14. It offers
-`InfisicalSDKClient(host, token, cache_ttl)`, logins for universal auth, AWS, OIDC, LDAP and a
-token, `secrets.list_secrets` / `get_secret_by_name` / `create_` / `update_` /
-`delete_secret_by_name`, folders, KMS and dynamic secrets. What it does not do decides most of
-the work:
+PSI talks to Infisical through `infisicalsdk` 1.0.17. `InfisicalClient` kept its interface, each
+call taking a token from PSI's token file cache, so setup, the CLI, the importer and the
+certificate code call it as before. What the SDK does not do decided the rest:
 
 | Gap in the SDK (1.0.17) | What PSI does |
 | --- | --- |
-| A bare `requests.Session()`: no timeout, and up to 4 retries with backoff on every call | Mount an adapter with a default timeout on `client.api.session`, and make serve threaded (below) |
-| No TLS settings; requests ignores `SSL_CERT_FILE`, which PSI's `ca_cert` sets today | Set `client.api.session.verify` from `ca_cert` and `verify_ssl` (`providers.infisical.ca_cert`, documented but never read, goes) |
-| No GCP or Azure login | Keep PSI's two metadata logins and hand the token to the SDK (`token_auth.login`) |
-| One token per client | One client per `AuthConfig.cache_key()`, as the token cache already keys |
-| Tokens in memory only | Keep PSI's token file cache, fed by the login responses' `expiresIn` |
-| Its own secret cache, 60 s by default, refreshed by a background thread | `cache_ttl=None`: PSI's encrypted cache is the only copy |
-| No batch create | The importer creates secrets one at a time, paced by `fetch_delay_ms` |
-| No certificate calls | See certificates below |
-| v3 raw endpoints, with imports returned beside the secrets | Merge imports into the listing as `includeImports` did, and test it |
-| AWS login signs the regional STS endpoint (region from `AWS_REGION` or IMDSv2) | Check the existing identities accept it before release, and say so in the docs |
+| A bare `requests.Session()`: no timeout, and up to 4 retries with backoff on every call | An adapter on the SDK's session gives every request a 30 s timeout; serve's threading is Part 2's |
+| No TLS settings; requests ignores `SSL_CERT_FILE`, which PSI's container units set | The session verifies with `ca_cert` (documented before, now read), else `SSL_CERT_FILE`, else requests' own bundle; `verify_ssl: false` turns it off |
+| No GCP or Azure login | PSI fetches the metadata token with httpx and posts it to Infisical's login through the SDK's request layer (`InfisicalSDKClient.api`) |
+| No batch create, no certificate calls | Through the SDK's request layer too, so every call to Infisical shares one session |
+| Tokens in memory only | PSI's token file cache, set on the client before each call |
+| Its own secret cache, refreshed by a background thread | `cache_ttl=0`: PSI's encrypted cache is the only copy |
+| v3 raw endpoints, with imports returned beside the secrets | PSI reads the folder's own secrets, as it did from v4 (it never merged imports) |
+| AWS login signs the regional STS endpoint | Documented: an AWS identity in Infisical names its region's endpoint |
 
-- **Certificates.** Recommended: drop `psi infisical tls` and issue certificates over ACME from
-  Infisical's cert-manager ACME directory, which QuickVM's `lago` and `next` deploys already
-  use through Traefik's `caServer`; any ACME client on the server (Caddy, Traefik, lego) then
-  does it, and PSI holds no certificate code. If a server needs PSI to issue them, the two
-  certificate calls stay as the only part of PSI's client until the SDK has them. Either way
-  the renew units go: they run `psi tls renew`, which does not exist (the command is
-  `psi infisical tls renew`), and `tests/test_unitgen.py` asserts the wrong string.
-- **Errors.** Lookup and setup map the SDK's `InfisicalError` status codes and requests'
-  exceptions to PSI's: 404 for a missing secret, 502 for the provider failing, and the retry
-  test in setup (`_is_retryable`) on requests' errors instead of httpx's.
-- **Deleted**: the httpx client in `providers/infisical/api.py` (about 170 of its 309 lines)
-  and the universal-auth and AWS logins in `auth.py` (about 65 lines, PSI's SigV4 signing
-  with them). **Kept**: the config models, the token file cache, the GCP and Azure logins, the
-  importer's logic and the CLI. httpx stays for PSI's own calls to Podman's socket.
-- **Upstream.** Offer Infisical's SDK a timeout, a session or `verify` argument, GCP and Azure
-  logins and certificates. Each one that lands deletes PSI's workaround for it.
-- **Tests.** The Infisical tests patch httpx with `MagicMock` today. They move to a stand-in
-  Infisical server on loopback (login, the secret list and get, folders, create), so they run
-  the real SDK and its retries, and fail if a new SDK release changes what PSI relies on.
-- **Docs.** `docs/infisical-provider.md`, the endpoint list and conventions in `CLAUDE.md`
-  ("Sync httpx everywhere" becomes httpx for PSI's own calls and each vendor's SDK for its
-  provider), and the README.
-- **Release.** A new image, then a qvm pull request that moves the runner's pin to it once
-  `psi infisical env` has fetched the pipeline's folder from the real instance; the homelab
-  and QuickVM's deploys follow.
-
-*Done when* every Infisical call goes through the SDK except the GCP and Azure logins (and the
-certificate calls, if kept), the Infisical tests run against the stand-in server, and qvm's
-runner fetches its pipeline secrets with the new image.
+- **Errors** are `InfisicalAPIError`, a `ProviderError` with the HTTP status (None when
+  Infisical could not be reached); lookup, setup's retries and the importer read the status.
+- **Found in the SDK**: with no AWS credentials, its AWS login raises botocore's
+  `NoCredentialsError` with a message it does not take, so the caller sees a `TypeError`; PSI
+  checks for credentials first, as its own code did. (qvm found a second: an import's secrets
+  are typed `BaseSecret` but arrive as dicts.) Both go upstream with a timeout, a `verify`
+  argument, GCP and Azure logins and certificates; each that lands deletes PSI's workaround.
+- **Found on the way**: the certificate renewal units ran `psi tls renew`, which does not
+  exist, so renewals always failed; they run `psi infisical tls renew`, and a test runs each
+  unit's command through psi's CLI. PyKCS11 1.5.18 does not build on Python 3.14, which had
+  broken every build since CI's cached layers expired; PSI moved to 1.5.20.
+- **Tests** run the real SDK against a stand-in Infisical where the adapter hands a request
+  to the network, `psi infisical env` as qvm's CI runner runs it included.
+- **Left**: qvm's runner moves its PSI pin to the new image once `psi infisical env` has
+  fetched the pipeline's folder from the real instance; the homelab and QuickVM's deploys
+  follow.
 
 ## Part 2: each cloud's secret store
 
@@ -139,11 +122,10 @@ read with its own identity, and its user data holds none.
 
 ## Open
 
-- Certificates: ACME from Infisical's cert-manager (recommended), or PSI keeps its two
-  certificate calls.
+- Certificates: PSI keeps issuing them (through the SDK's request layer); ACME from
+  Infisical's cert-manager would let any ACME client on the server do it instead.
 - Whether the cloud kinds read one key out of a JSON secret (an AWS Secrets Manager secret
   holding several values), or one secret per value only.
-- The open bugs in `notes/` that this work touches: GCP and Azure metadata errors are not
-  caught (`gcp-azure-metadata-http-error-uncaught.md`), and listing without `recursive`
-  leaves drop-ins out of date (`list-secrets-non-recursive-drop-in-drift.md`). Fix them where
-  the code moves.
+- The open bug in `notes/` that Part 2 touches: listing without `recursive` leaves drop-ins out
+  of date (`list-secrets-non-recursive-drop-in-drift.md`). (GCP and Azure metadata errors are
+  caught since #41.)
