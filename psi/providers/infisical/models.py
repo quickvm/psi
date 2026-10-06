@@ -8,6 +8,8 @@ from pathlib import Path  # noqa: TCH003 — Pydantic needs Path at runtime
 
 from pydantic import BaseModel, model_validator
 
+from psi.errors import ConfigError
+
 
 class AuthMethod(StrEnum):
     """Supported Infisical authentication methods."""
@@ -19,25 +21,52 @@ class AuthMethod(StrEnum):
 
 
 class AuthConfig(BaseModel):
-    """Authentication configuration for Infisical."""
+    """Authentication configuration for Infisical.
+
+    universal-auth takes its client secret inline (``client_secret``) or from a file that
+    holds nothing else (``client_secret_file``), so the config itself need not hold it.
+    """
 
     method: AuthMethod
     identity_id: str | None = None
     client_id: str | None = None
     client_secret: str | None = None
+    client_secret_file: Path | None = None
 
     @model_validator(mode="after")
     def validate_auth_fields(self) -> AuthConfig:
         match self.method:
             case AuthMethod.UNIVERSAL:
-                if not self.client_id or not self.client_secret:
-                    msg = "universal-auth requires client_id and client_secret"
+                if not self.client_id:
+                    msg = "universal-auth requires client_id"
+                    raise ValueError(msg)
+                if (self.client_secret is None) == (self.client_secret_file is None):
+                    msg = "universal-auth requires one of client_secret and client_secret_file"
                     raise ValueError(msg)
             case AuthMethod.AWS_IAM | AuthMethod.GCP | AuthMethod.AZURE:
                 if not self.identity_id:
                     msg = f"{self.method} requires identity_id"
                     raise ValueError(msg)
         return self
+
+    def resolved_client_secret(self) -> str:
+        """The client secret, read from ``client_secret_file`` when that names it.
+
+        Raises:
+            ConfigError: The file cannot be read, or holds nothing.
+        """
+        if self.client_secret_file is None:
+            assert self.client_secret is not None
+            return self.client_secret
+        try:
+            secret = self.client_secret_file.read_text().strip()
+        except OSError as e:
+            msg = f"cannot read client_secret_file {self.client_secret_file}: {e.strerror}"
+            raise ConfigError(msg) from e
+        if not secret:
+            msg = f"client_secret_file {self.client_secret_file} is empty"
+            raise ConfigError(msg)
+        return secret
 
     def cache_key(self) -> str:
         """Unique hash for token cache file keying."""

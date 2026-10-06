@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import json
 import unittest.mock
+from typing import TYPE_CHECKING
 
 import pytest
 
+from psi.errors import ConfigError
 from psi.models import DeployMode, SecretSource, SystemdScope, WorkloadConfig, detect_scope
 from psi.provider import parse_mapping
 from psi.providers.infisical.models import (
     AuthConfig,
     AuthMethod,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestAuthConfig:
@@ -25,12 +30,40 @@ class TestAuthConfig:
         assert auth.method == AuthMethod.UNIVERSAL
 
     def test_universal_missing_client_id(self) -> None:
-        with pytest.raises(ValueError, match="client_id and client_secret"):
+        with pytest.raises(ValueError, match="requires client_id"):
             AuthConfig(method=AuthMethod.UNIVERSAL, client_secret="csec")
 
     def test_universal_missing_client_secret(self) -> None:
-        with pytest.raises(ValueError, match="client_id and client_secret"):
+        with pytest.raises(ValueError, match="one of client_secret and client_secret_file"):
             AuthConfig(method=AuthMethod.UNIVERSAL, client_id="cid")
+
+    def test_universal_takes_one_client_secret_not_two(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="one of client_secret and client_secret_file"):
+            AuthConfig(
+                method=AuthMethod.UNIVERSAL,
+                client_id="cid",
+                client_secret="csec",
+                client_secret_file=tmp_path / "secret",
+            )
+
+    def test_a_client_secret_file_is_read_without_its_newline(self, tmp_path: Path) -> None:
+        (tmp_path / "secret").write_text("csec\n")
+        auth = AuthConfig(
+            method=AuthMethod.UNIVERSAL, client_id="cid", client_secret_file=tmp_path / "secret"
+        )
+        assert auth.resolved_client_secret() == "csec"
+
+    @pytest.mark.parametrize(("content", "says"), [(None, "cannot read"), ("\n", "is empty")])
+    def test_a_missing_or_empty_client_secret_file_is_a_config_error(
+        self, tmp_path: Path, content: str | None, says: str
+    ) -> None:
+        if content is not None:
+            (tmp_path / "secret").write_text(content)
+        auth = AuthConfig(
+            method=AuthMethod.UNIVERSAL, client_id="cid", client_secret_file=tmp_path / "secret"
+        )
+        with pytest.raises(ConfigError, match=says):
+            auth.resolved_client_secret()
 
     def test_aws_iam_valid(self) -> None:
         auth = AuthConfig(method=AuthMethod.AWS_IAM, identity_id="id123")

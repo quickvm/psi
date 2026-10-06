@@ -42,9 +42,9 @@ def login(sdk: InfisicalSDKClient, auth: AuthConfig) -> tuple[str, int]:
     """
     match auth.method:
         case AuthMethod.UNIVERSAL:
-            assert auth.client_id is not None and auth.client_secret is not None
+            assert auth.client_id is not None
             response = sdk.auth.universal_auth.login(
-                client_id=auth.client_id, client_secret=auth.client_secret
+                client_id=auth.client_id, client_secret=auth.resolved_client_secret()
             )
         case AuthMethod.AWS_IAM:
             assert auth.identity_id is not None

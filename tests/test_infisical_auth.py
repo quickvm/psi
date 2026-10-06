@@ -33,6 +33,21 @@ class TestUniversalAuth:
             assert client.ensure_token(auth) == "access-token-1"
 
 
+class TestClientSecretFile:
+    def test_the_file_logs_in_as_the_secret_would(
+        self, tmp_path: Path, infisical: FakeInfisical
+    ) -> None:
+        (tmp_path / "client-secret").write_text("test-secret\n")
+        auth = AuthConfig(
+            method=AuthMethod.UNIVERSAL,
+            client_id="test-client",
+            client_secret_file=tmp_path / "client-secret",
+        )
+        with _client(tmp_path) as client:
+            assert client.ensure_token(auth) == "access-token-1"
+        assert infisical.sent[0].body == {"clientId": "test-client", "clientSecret": "test-secret"}
+
+
 class TestAwsIam:
     def test_signs_for_the_regions_sts_endpoint(
         self, tmp_path: Path, infisical: FakeInfisical, monkeypatch: pytest.MonkeyPatch
