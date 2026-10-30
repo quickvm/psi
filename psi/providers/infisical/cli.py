@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.console import Console
 
-from psi.errors import ConfigError
+from psi.errors import ConfigError, PsiError
 from psi.files import write_bytes_secure, write_text_secure
 from psi.models import detect_scope
 from psi.settings import load_settings
@@ -103,9 +103,13 @@ def env_cmd(
         str,
         typer.Option("--format", help="Output format: export or env."),
     ] = "export",
+    output: Annotated[
+        Path | None,
+        typer.Option(help="Write to this file, mode 0600, instead of stdout."),
+    ] = None,
     config: ConfigOption = None,
 ) -> None:
-    """Fetch secrets and print as environment variables."""
+    """Fetch secrets as environment variables, on stdout or to --output."""
     from psi.providers.infisical.api import InfisicalClient
     from psi.providers.infisical.models import resolve_auth
 
@@ -122,14 +126,26 @@ def env_cmd(
     finally:
         client.close()
 
+    lines = []
     for secret in secrets:
         key = secret["secretKey"]
         value = secret["secretValue"]
         if fmt == "export":
             escaped = value.replace("'", "'\\''")
-            print(f"export {key}='{escaped}'")  # noqa: T201
+            lines.append(f"export {key}='{escaped}'\n")
         else:
-            print(f"{key}={value}")  # noqa: T201
+            lines.append(f"{key}={value}\n")
+    text = "".join(lines)
+
+    if output is None:
+        print(text, end="")  # noqa: T201
+        return
+    try:
+        write_text_secure(output, text)
+    except OSError as e:
+        msg = f"Could not write {output}: {e.strerror or e}"
+        raise PsiError(msg) from e
+    console.print(f"[green]Wrote {output}[/green]")
 
 
 @infisical_app.command(name="write-file")

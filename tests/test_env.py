@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -128,6 +129,40 @@ class TestEnvEdgeCases:
         assert captured.out == ""
         assert "Unknown project 'nonexistent'. Available: myproject" in captured.err
 
+    def test_output_replaces_a_file_and_its_mode(self, mock_infisical, tmp_path):
+        _, client = mock_infisical
+        client.list_secrets.return_value = [{"secretKey": "TOKEN", "secretValue": "new"}]
+        out = tmp_path / "env"
+        out.write_text("export TOKEN='old'\n")
+        out.chmod(0o644)
+
+        result = runner.invoke(
+            app, ["infisical", "env", "--project", "myproject", "--output", str(out)]
+        )
+
+        assert result.exit_code == 0, result.output
+        assert out.read_text() == "export TOKEN='new'\n"
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
+
+    def test_output_it_cannot_write_fails_with_the_reason(
+        self, mock_infisical, tmp_path, monkeypatch, capsys
+    ):
+        _, client = mock_infisical
+        client.list_secrets.return_value = [{"secretKey": "TOKEN", "secretValue": "s3cret"}]
+        (tmp_path / "env").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["psi", "infisical", "env", "--project", "myproject", "--output", "env"]
+        )
+
+        with pytest.raises(SystemExit, match="1"):
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Could not write env: Is a directory" in captured.err
+        assert [p.name for p in tmp_path.iterdir()] == ["env"]
+
 
 class TestEnvThroughTheSdk:
     """The command qvm's CI runner runs, against a stand-in Infisical, nothing mocked between."""
@@ -144,6 +179,21 @@ class TestEnvThroughTheSdk:
             )
         assert result.exit_code == 0, result.output
         assert result.output == "export QVM_API_KEY='k'\\''1'\n"
+
+    def test_output_puts_the_exports_in_a_private_file_not_stdout(self, infisical, tmp_path):
+        settings = _fake_settings()
+        settings.state_dir = tmp_path
+        settings.providers["infisical"]["auth"]["client_id"] = infisical.client_id
+        settings.providers["infisical"]["auth"]["client_secret"] = infisical.client_secret
+        infisical.folders[("proj-uuid", "prod", "/pipelines/qvm")] = {"QVM_API_KEY": "k'1"}
+        out = tmp_path / "run" / "env"
+        args = ["infisical", "env", "--project", "myproject", "--path", "/pipelines/qvm"]
+        with patch("psi.providers.infisical.cli.load_settings", return_value=settings):
+            result = runner.invoke(app, [*args, "--output", str(out)])
+        assert result.exit_code == 0, result.output
+        assert "QVM_API_KEY" not in result.output
+        assert out.read_text() == "export QVM_API_KEY='k'\\''1'\n"
+        assert stat.S_IMODE(out.stat().st_mode) == 0o600
 
     def test_a_folder_exports_what_it_imports_under_its_own(self, infisical, tmp_path) -> None:
         settings = _fake_settings()
