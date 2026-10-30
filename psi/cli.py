@@ -49,6 +49,7 @@ from psi.providers.nitrokeyhsm.cli import nitrokeyhsm_app  # noqa: E402
 app.add_typer(nitrokeyhsm_app)
 
 console = Console()
+err_console = Console(stderr=True)
 
 ConfigOption = Annotated[
     Path | None,
@@ -524,7 +525,7 @@ def main() -> None:
 
 
 def _print_error(message: str) -> None:
-    console.print(f"[red]Error:[/red] {message}", highlight=False)
+    err_console.print(f"[red]Error:[/red] {message}", highlight=False)
 
 
 def _print_validation_error(exc: ValidationError) -> None:
@@ -532,14 +533,14 @@ def _print_validation_error(exc: ValidationError) -> None:
     for err in exc.errors():
         loc = " → ".join(str(p) for p in err["loc"])
         lines.append(f"  - {loc}: {err['msg']}")
-    console.print("\n".join(lines), style="red", highlight=False)
+    err_console.print("\n".join(lines), style="red", highlight=False)
 
 
 def _print_bug() -> None:
-    console.print(
+    err_console.print(
         "[red]Internal error — this is a bug.[/red]\n"
         "Please report it at "
         "https://github.com/quickvm/psi/issues\n",
         highlight=False,
     )
-    console.print_exception()
+    err_console.print_exception()

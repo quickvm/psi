@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.console import Console
 
+from psi.errors import ConfigError, PsiError
 from psi.files import write_bytes_secure, write_text_secure
 from psi.models import detect_scope
 from psi.settings import load_settings
 
 if TYPE_CHECKING:
-    from psi.providers.infisical.models import AuthConfig
+    from psi.providers.infisical.models import AuthConfig, InfisicalConfig, ProjectConfig
 
 console = Console()
 
@@ -48,6 +49,15 @@ def _get_infisical_config(config: Path | None = None):  # noqa: ANN202
 
     settings = load_settings(config, scope=detect_scope())
     return settings, InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
+
+
+def _get_project(inf_config: InfisicalConfig, alias: str) -> ProjectConfig:
+    """Return the project configured as alias, or fail naming the ones that are."""
+    proj = inf_config.projects.get(alias)
+    if not proj:
+        msg = f"Unknown project '{alias}'. Available: {', '.join(inf_config.projects)}"
+        raise ConfigError(msg)
+    return proj
 
 
 @infisical_app.command()
@@ -93,19 +103,18 @@ def env_cmd(
         str,
         typer.Option("--format", help="Output format: export or env."),
     ] = "export",
+    output: Annotated[
+        Path | None,
+        typer.Option(help="Write to this file, mode 0600, instead of stdout."),
+    ] = None,
     config: ConfigOption = None,
 ) -> None:
-    """Fetch secrets and print as environment variables."""
+    """Fetch secrets as environment variables, on stdout or to --output."""
     from psi.providers.infisical.api import InfisicalClient
     from psi.providers.infisical.models import resolve_auth
 
     settings, inf_config = _get_infisical_config(config)
-    proj = inf_config.projects.get(project)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project}'. Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project)
 
     auth = resolve_auth(proj, inf_config)
     env = environment or proj.environment
@@ -117,14 +126,26 @@ def env_cmd(
     finally:
         client.close()
 
+    lines = []
     for secret in secrets:
         key = secret["secretKey"]
         value = secret["secretValue"]
         if fmt == "export":
             escaped = value.replace("'", "'\\''")
-            print(f"export {key}='{escaped}'")  # noqa: T201
+            lines.append(f"export {key}='{escaped}'\n")
         else:
-            print(f"{key}={value}")  # noqa: T201
+            lines.append(f"{key}={value}\n")
+    text = "".join(lines)
+
+    if output is None:
+        print(text, end="")  # noqa: T201
+        return
+    try:
+        write_text_secure(output, text)
+    except OSError as e:
+        msg = f"Could not write {output}: {e.strerror or e}"
+        raise PsiError(msg) from e
+    console.print(f"[green]Wrote {output}[/green]")
 
 
 @infisical_app.command(name="write-file")
@@ -154,12 +175,7 @@ def write_file(
     from psi.providers.infisical.models import resolve_auth
 
     settings, inf_config = _get_infisical_config(config)
-    proj = inf_config.projects.get(project)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project}'. Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project)
 
     auth = resolve_auth(proj, inf_config)
 
@@ -291,13 +307,7 @@ def _run_import_and_display(
     from psi.providers.infisical.importer import run_import
     from psi.providers.infisical.models import ConflictPolicy, resolve_auth
 
-    proj = inf_config.projects.get(project_alias)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project_alias}'. "
-            f"Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project_alias)
 
     auth = resolve_auth(proj, inf_config)
     env = environment or proj.environment

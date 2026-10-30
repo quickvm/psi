@@ -272,8 +272,8 @@ psi infisical login
 # Fetch secrets as environment variables
 eval "$(psi infisical env --project myproject --path /myapp)"
 
-# Fetch secrets as KEY=VALUE (for env files)
-psi infisical env --project myproject --path /myapp --format env > /run/app/env
+# Write them as KEY=VALUE to an env file, mode 0600
+psi infisical env --project myproject --path /myapp --format env --output /run/app/env
 
 # Write a single secret to a file
 psi infisical write-file DB_CERT /etc/ssl/db.pem --project myproject
@@ -288,6 +288,11 @@ psi infisical import env-file .env --project myproject --path /app
 psi infisical import podman-secret --all --project myproject --path /app
 psi infisical import quadlet app.container --project myproject --path /app
 ```
+
+`psi infisical env` prints secret values on stdout unless `--output` names a file. In a
+container, stdout also goes to Podman's log driver, which keeps it: in the journal with
+`journald`, the default on Fedora, or in a file with `k8s-file`. There, pass `--output` a path
+in a directory the container mounts, or run the container with `--log-driver=none`.
 
 ## Security Model
 

@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from psi.errors import ConfigError, ProviderError, PsiError
+from psi.providers.infisical.models import ProjectConfig
 
 
 class TestMainErrorHandler:
@@ -19,7 +21,8 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "bad config" in captured.out
+        assert captured.out == ""
+        assert "bad config" in captured.err
 
     def test_config_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("psi.cli.app", side_effect=ConfigError("missing field")):
@@ -29,7 +32,8 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "missing field" in captured.out
+        assert captured.out == ""
+        assert "missing field" in captured.err
 
     def test_provider_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch(
@@ -42,7 +46,8 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "HSM down" in captured.out
+        assert captured.out == ""
+        assert "HSM down" in captured.err
 
     def test_unexpected_exception_exits_2(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch("psi.cli.app", side_effect=RuntimeError("unexpected")):
@@ -52,7 +57,8 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "this is a bug" in captured.out
+        assert captured.out == ""
+        assert "this is a bug" in captured.err
 
     def test_keyboard_interrupt_exits_130(self) -> None:
         with patch("psi.cli.app", side_effect=KeyboardInterrupt):
@@ -70,9 +76,10 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "Network error" in captured.out
-        assert "refused" in captured.out
-        assert "this is a bug" not in captured.out
+        assert captured.out == ""
+        assert "Network error" in captured.err
+        assert "refused" in captured.err
+        assert "this is a bug" not in captured.err
 
     def test_httpx_status_error_exits_1_clean(self, capsys: pytest.CaptureFixture[str]) -> None:
         """A raw HTTPStatusError (missed by provider wrapping) is still clean."""
@@ -87,5 +94,21 @@ class TestMainErrorHandler:
                 main()
 
         captured = capsys.readouterr()
-        assert "Network error" in captured.out
-        assert "this is a bug" not in captured.out
+        assert captured.out == ""
+        assert "Network error" in captured.err
+        assert "this is a bug" not in captured.err
+
+    def test_validation_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(ValidationError) as invalid:
+            ProjectConfig.model_validate({})
+
+        with patch("psi.cli.app", side_effect=invalid.value):
+            from psi.cli import main
+
+            with pytest.raises(SystemExit, match="1"):
+                main()
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Configuration error" in captured.err
+        assert "id: Field required" in captured.err
