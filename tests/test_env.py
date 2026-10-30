@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
-from psi.cli import app
+from psi.cli import app, main
 
 runner = CliRunner()
 
@@ -117,14 +118,15 @@ class TestEnvEdgeCases:
         assert result.exit_code == 0
         assert result.output.strip() == ""
 
-    def test_unknown_project(self, mock_infisical):
-        result = runner.invoke(
-            app,
-            ["infisical", "env", "--project", "nonexistent"],
-        )
+    def test_unknown_project_fails_with_nothing_to_eval(self, mock_infisical, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["psi", "infisical", "env", "--project", "nonexistent"])
 
-        assert result.exit_code == 1
-        assert "Unknown project" in result.output
+        with pytest.raises(SystemExit, match="1"):
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Unknown project 'nonexistent'. Available: myproject" in captured.err
 
 
 class TestEnvThroughTheSdk:

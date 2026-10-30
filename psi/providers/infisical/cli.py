@@ -9,12 +9,13 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 from rich.console import Console
 
+from psi.errors import ConfigError
 from psi.files import write_bytes_secure, write_text_secure
 from psi.models import detect_scope
 from psi.settings import load_settings
 
 if TYPE_CHECKING:
-    from psi.providers.infisical.models import AuthConfig
+    from psi.providers.infisical.models import AuthConfig, InfisicalConfig, ProjectConfig
 
 console = Console()
 
@@ -48,6 +49,15 @@ def _get_infisical_config(config: Path | None = None):  # noqa: ANN202
 
     settings = load_settings(config, scope=detect_scope())
     return settings, InfisicalConfig.model_validate(settings.providers.get("infisical", {}))
+
+
+def _get_project(inf_config: InfisicalConfig, alias: str) -> ProjectConfig:
+    """Return the project configured as alias, or fail naming the ones that are."""
+    proj = inf_config.projects.get(alias)
+    if not proj:
+        msg = f"Unknown project '{alias}'. Available: {', '.join(inf_config.projects)}"
+        raise ConfigError(msg)
+    return proj
 
 
 @infisical_app.command()
@@ -100,12 +110,7 @@ def env_cmd(
     from psi.providers.infisical.models import resolve_auth
 
     settings, inf_config = _get_infisical_config(config)
-    proj = inf_config.projects.get(project)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project}'. Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project)
 
     auth = resolve_auth(proj, inf_config)
     env = environment or proj.environment
@@ -154,12 +159,7 @@ def write_file(
     from psi.providers.infisical.models import resolve_auth
 
     settings, inf_config = _get_infisical_config(config)
-    proj = inf_config.projects.get(project)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project}'. Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project)
 
     auth = resolve_auth(proj, inf_config)
 
@@ -291,13 +291,7 @@ def _run_import_and_display(
     from psi.providers.infisical.importer import run_import
     from psi.providers.infisical.models import ConflictPolicy, resolve_auth
 
-    proj = inf_config.projects.get(project_alias)
-    if not proj:
-        console.print(
-            f"[red]Unknown project '{project_alias}'. "
-            f"Available: {', '.join(inf_config.projects)}[/red]"
-        )
-        raise typer.Exit(1)
+    proj = _get_project(inf_config, project_alias)
 
     auth = resolve_auth(proj, inf_config)
     env = environment or proj.environment
